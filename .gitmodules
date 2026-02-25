@@ -1,0 +1,3 @@
+[submodule "submodules/cuBQL"]
+	path = submodules/cuBQL
+	url = git@github.com:NVIDIA/cuBQL.git

@@ -18,6 +18,7 @@
 #include <dvr_course-common.cuh>
 // icon_rt
 #include "Params.h"
+#include "UElems.h"
 
 using namespace dvr_course;
 
@@ -56,7 +57,7 @@ struct PRD {
 inline __device__ bool sampleVolume(const Volume &vol, vec3f pos, float &value)
 {
 #ifdef RTCORE
-  if (vol.useTriangles) {
+  if (vol.mode==TRIANGLE_MODE) {
     PRD prd;
     prd.value = 0.f;
     prd.primID = ~0u;
@@ -72,7 +73,7 @@ inline __device__ bool sampleVolume(const Volume &vol, vec3f pos, float &value)
       value = cell.getValue(spherical.x);
       return true;
     }
-  } else {
+  } else if (vol.mode==USER_GEOM_MODE) {
     PRD prd;
     prd.value = 0.f;
     prd.primID = ~0u;
@@ -85,6 +86,31 @@ inline __device__ bool sampleVolume(const Volume &vol, vec3f pos, float &value)
       value = prd.value;
       return true;
     }
+  } else if (vol.mode==CUBQL_MODE) {
+    typename bvh_t::box_t box; box.lower = box.upper = {pos.x,pos.y,pos.z};
+    bool hit{false};
+    auto lambda = [&vol,pos,&hit,&value]
+      (const uint32_t primID)
+    {
+      const int *I = vol.cubql.indices + primID*6;
+      const float v = vol.cubql.perVertex[primID*6+0];
+      // Hack direction vector into w:
+      const vec4f v0(vol.cubql.vertices[I[0]],v);
+      const vec4f v1(vol.cubql.vertices[I[1]],v);
+      const vec4f v2(vol.cubql.vertices[I[2]],v);
+      const vec4f v3(vol.cubql.vertices[I[3]],v);
+      const vec4f v4(vol.cubql.vertices[I[4]],v);
+      const vec4f v5(vol.cubql.vertices[I[5]],v);
+      if (intersectWedgeEXT(value,pos,v0,v1,v2,v3,v4,v5)) {
+        hit = true;
+        value = v;
+        return CUBQL_TERMINATE_TRAVERSAL;
+      }
+      return CUBQL_CONTINUE_TRAVERSAL;
+    };
+    if (hit) printf("%f\n",value);
+    cuBQL::fixedBoxQuery::forEachPrim(lambda,*vol.cubql.handle,box);
+    return hit;
   }
 #else
   // on non-RT hardware we resort to just linearly

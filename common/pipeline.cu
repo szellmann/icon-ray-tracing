@@ -638,6 +638,18 @@ struct Pipeline::Impl
             parent->resetAccumulation();
           }
         }
+        if (p.type == UIParam::Select) {
+          std::string opt = p.asSelect.options[*p.asSelect.o];
+          if (ImGui::BeginCombo(p.name.c_str(), opt.c_str())) {
+            for (size_t o=0; o<p.asSelect.options.size(); ++o) {
+              bool selected = p.asSelect.options[o]==opt;
+              if (ImGui::Selectable(p.asSelect.options[o].c_str(), selected)) {
+                *p.asSelect.o = o;
+              }
+            }
+            ImGui::EndCombo();
+          }
+        }
       }
     }
     ImGui::End();
@@ -713,7 +725,7 @@ struct Pipeline::Impl
   struct UIParam
   {
     std::string name;
-    enum { Bool, Float, } type;
+    enum { Bool, Float, Select, } type;
     struct {
       bool *b;
     } asBool;
@@ -722,6 +734,10 @@ struct Pipeline::Impl
       float minf;
       float maxf;
     } asFloat;
+    struct {
+      std::vector<std::string> options;
+      int *o;
+    } asSelect;
   };
   std::vector<UIParam> uiParams;
 
@@ -873,6 +889,16 @@ void Pipeline::uiParam(std::string name, float *f, float minf, float maxf) {
   parm.asFloat.f = f;
   parm.asFloat.minf = minf;
   parm.asFloat.maxf = maxf;
+  impl->uiParam(parm);
+}
+
+void Pipeline::uiParam(
+    std::string name, const std::vector<std::string> &options, int *o) {
+  Impl::UIParam parm;
+  parm.name = name;
+  parm.type = Impl::UIParam::Select;
+  parm.asSelect.options = options;
+  parm.asSelect.o = o;
   impl->uiParam(parm);
 }
 

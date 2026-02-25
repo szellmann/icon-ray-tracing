@@ -11,6 +11,27 @@
 #include "Params-owl.h"
 #endif
 
+// ==================================================================
+// cuda call
+// ==================================================================
+
+#ifndef NDEBUG
+#define CUDA_SAFE_CALL(FUNC) { cuda_safe_call((FUNC), __FILE__, __LINE__); }
+#else
+#define CUDA_SAFE_CALL(FUNC) FUNC
+#endif
+#define CUDA_SAFE_CALL_X(FUNC) { cuda_safe_call((FUNC), __FILE__, __LINE__, true); }
+
+inline void cuda_safe_call(
+    cudaError_t code, const char *file, int line, bool fatal=false)
+{
+  if (code != cudaSuccess) {
+    fprintf(stderr, "CUDA error: %s %s:%i\n", cudaGetErrorString(code), file, line);
+    if (fatal)
+      exit(code);
+  }
+}
+
 // common namespace for helper classes:
 // Camera, FB, wrappers for RTX execution model, etc. etc.
 using namespace dvr_course;
@@ -21,7 +42,7 @@ struct {
   std::string filepath;
   Transfunc transfunc;
   float unitDistance;
-  bool useOptixTriangles;
+  int mode;
   bool accelActive;
 #ifdef RTCORE
   OWLGroup trianglesTLAS, userGeomTLAS;
@@ -70,21 +91,48 @@ static void toggleRayGen(Pipeline &pl) {
   accelActive = g_appState.accelActive;
 }
 
-static void toggleOptixTriangles(Pipeline &pl, LaunchParams &parms) {
+static void toggleMode(Pipeline &pl, LaunchParams &parms) {
 #ifdef RTCORE
-  static bool useOptixTriangles=true;
-  if (g_appState.useOptixTriangles != useOptixTriangles) {
-    if (g_appState.useOptixTriangles) {
+  static int mode=TRIANGLE_MODE;
+  if (g_appState.mode != mode) {
+    if (g_appState.mode==TRIANGLE_MODE) {
       owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
-    } else {
+    } else if (g_appState.mode==USER_GEOM_MODE) {
       owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.userGeomTLAS);
+    } else if (g_appState.mode==CUBQL_MODE) {
+      //todo
     }
-    pl.launchParam("volume.useTriangles", parms.volume.useTriangles)
-        = g_appState.useOptixTriangles;
+    pl.launchParam("volume.mode", parms.volume.mode) = g_appState.mode;
     pl.resetAccumulation();
   }
-  useOptixTriangles = g_appState.useOptixTriangles;
+  mode = g_appState.mode;
 #endif
+}
+
+__global__ void computeBounds(box3f *primBounds,
+                              const vec3f *vertices,
+                              const int *indices,
+                              size_t numCells)
+{
+  size_t cellID = threadIdx.x+blockIdx.x*blockDim.x;
+  if (cellID >= numCells) return;
+
+  const int *I = indices + cellID*6;
+  const vec3f v0 = vertices[I[0]];
+  const vec3f v1 = vertices[I[1]];
+  const vec3f v2 = vertices[I[2]];
+  const vec3f v3 = vertices[I[3]];
+  const vec3f v4 = vertices[I[4]];
+  const vec3f v5 = vertices[I[5]];
+
+  // primBounds:
+  primBounds[cellID] = box3f(vec3f(1e31f),vec3f(-1e31f));
+  primBounds[cellID].extend(v0);
+  primBounds[cellID].extend(v1);
+  primBounds[cellID].extend(v2);
+  primBounds[cellID].extend(v3);
+  primBounds[cellID].extend(v4);
+  primBounds[cellID].extend(v5);
 }
 
 extern "C" int main(int argc, char *argv[]) {
@@ -194,8 +242,13 @@ extern "C" int main(int argc, char *argv[]) {
   g_appState.accelActive = true;
   pl.uiParam("Use naive accel", &g_appState.accelActive);
 
-  g_appState.useOptixTriangles = true;
-  pl.uiParam("Use OptiX triangle sampler", &g_appState.useOptixTriangles);
+  g_appState.mode = TRIANGLE_MODE;
+  std::vector<std::string> options({
+    "user geom mode",
+    "triangle mode",
+    "cuBQL mode",
+  });
+  pl.uiParam("Sampler mode", options, &g_appState.mode);
 
 #ifdef RTCORE
   pl.setRayGen(ptxCode, "woodcockTrackingWithAccel");
@@ -291,12 +344,101 @@ extern "C" int main(int argc, char *argv[]) {
   owlInstanceGroupSetChild(g_appState.userGeomTLAS, 0, userGeomBLAS);
 
   owlGroupBuildAccel(g_appState.userGeomTLAS);
+
+
+  // ######################################################
+  // umesh variant
+  // ######################################################
+  std::vector<vec3f> vertexUMesh;
+  std::vector<int> indexUMesh;
+  std::vector<float> vertexScalars;
+  for (size_t i=0; i<cells.size(); ++i) {
+    const ICONCell &cell = cells[i];
+    for (int h=0; h<cell.numLayers; ++h) {
+      // bottom triangle:
+      vec3f bv1 = toCartesian({cell.height[h],cell.lat.x,cell.lon.x});
+      vec3f bv2 = toCartesian({cell.height[h],cell.lat.y,cell.lon.y});
+      vec3f bv3 = toCartesian({cell.height[h],cell.lat.z,cell.lon.z});
+      //top triangle:
+      vec3f tv1 = toCartesian({cell.height[h+1],cell.lat.x,cell.lon.x});
+      vec3f tv2 = toCartesian({cell.height[h+1],cell.lat.y,cell.lon.y});
+      vec3f tv3 = toCartesian({cell.height[h+1],cell.lat.z,cell.lon.z});
+      // value: (to-do: interpol)
+      float v = cell.value[h];
+      
+      int idx0 = vertexUMesh.size();
+
+      vertexUMesh.push_back(bv1); vertexScalars.push_back(v);
+      vertexUMesh.push_back(bv2); vertexScalars.push_back(v);
+      vertexUMesh.push_back(bv3); vertexScalars.push_back(v);
+
+      vertexUMesh.push_back(tv1); vertexScalars.push_back(v);
+      vertexUMesh.push_back(tv2); vertexScalars.push_back(v);
+      vertexUMesh.push_back(tv3); vertexScalars.push_back(v);
+
+      indexUMesh.push_back(idx0+0);
+      indexUMesh.push_back(idx0+1);
+      indexUMesh.push_back(idx0+2);
+      indexUMesh.push_back(idx0+3);
+      indexUMesh.push_back(idx0+4);
+      indexUMesh.push_back(idx0+5);
+    }
+  }
+
+  vec3f *d_vertices{nullptr};
+  int *d_indices{nullptr};
+  size_t numVertices = vertexUMesh.size();
+  size_t numIndices = indexUMesh.size();
+  size_t numWedges = indexUMesh.size()/6;
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_vertices, sizeof(vertexUMesh[0])*numVertices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_vertices,
+                            vertexUMesh.data(),
+                            sizeof(vertexUMesh[0])*numVertices,
+                            cudaMemcpyHostToDevice));
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_indices, sizeof(indexUMesh[0])*numIndices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_indices,
+                            indexUMesh.data(),
+                            sizeof(indexUMesh[0])*numIndices,
+                            cudaMemcpyHostToDevice));
+
+  box3f *primBounds;
+  CUDA_SAFE_CALL(cudaMalloc(&primBounds, sizeof(primBounds[0])*numWedges));
+
+  computeBounds<<<iDivUp(numWedges,1024),1024>>>(primBounds,
+                                                 d_vertices,
+                                                 d_indices,
+                                                 numWedges);
+
+  bvh_t bvh;
+
+  cuBQL::DeviceMemoryResource memResource;
+  cuBQL::gpuBuilder(bvh,
+                    (const cuBQL::box_t<float,3>*)primBounds,
+                    numWedges,
+                    cuBQL::BuildConfig(),
+                    0,
+                    memResource);
+
+  CUDA_SAFE_CALL(cudaFree(primBounds));
+
+  float *d_perVertex{nullptr};
+  CUDA_SAFE_CALL(cudaMalloc(&d_perVertex, sizeof(vertexScalars[0])*numVertices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_perVertex,
+                            vertexScalars.data(),
+                            sizeof(vertexScalars[0])*numVertices,
+                            cudaMemcpyHostToDevice));
 #endif
 
   // volume
 #ifdef RTCORE
   owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
-  pl.launchParam("volume.useTriangles", parms.volume.useTriangles) = true;
+  pl.launchParam("volume.mode", parms.volume.mode) = TRIANGLE_MODE;
+  pl.launchParam("volume.cubql.handle", (RawPointer &)parms.volume.cubql.handle) = &bvh;
+  pl.launchParam("volume.cubql.vertices", (RawPointer &)parms.volume.cubql.vertices) = d_vertices;
+  pl.launchParam("volume.cubql.indices", (RawPointer &)parms.volume.cubql.indices) = d_indices;
+  pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = d_perVertex;
 #endif
   pl.launchParam("volume.cells", (RawPointer &)parms.volume.cells) = deviceCells.data();
   pl.launchParam("volume.numCells", parms.volume.numCells) = (int)deviceCells.size();
@@ -312,7 +454,7 @@ extern "C" int main(int argc, char *argv[]) {
   // loop returns immediately
   do {
     toggleRayGen(pl);
-    toggleOptixTriangles(pl,parms);
+    toggleMode(pl,parms);
 
     struct {
       vec3f lower_left, horizontal, vertical;

@@ -12,16 +12,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_executable(${PROJECT_NAME})
 if (DVR_COURSE_WITH_OWL)
   enable_language(CUDA)
-  target_sources(${PROJECT_NAME} PRIVATE hostCode.cpp)
+  target_sources(${PROJECT_NAME} PRIVATE hostCode.cu)
   embed_ptx(
     OUTPUT_TARGET icon_deviceCode-ptx
-    PTX_LINK_LIBRARIES dvr_course-common
+    PTX_LINK_LIBRARIES dvr_course-common $<BUILD_INTERFACE:cuBQL_cuda_float3_static>
     EMBEDDED_SYMBOL_NAMES ptxCode
     SOURCES deviceCode.cu
   )
   target_link_libraries(${PROJECT_NAME} PRIVATE icon_deviceCode-ptx)
 else()
-  target_sources(${PROJECT_NAME} PRIVATE hostCode.cpp deviceCode.cu)
+  target_sources(${PROJECT_NAME} PRIVATE hostCode.cu deviceCode.cu)
+  configure_cuda_src(hostCode.cu)
   configure_cuda_src(deviceCode.cu)
 endif()
 target_link_libraries(${PROJECT_NAME} PRIVATE dvr_course-common)
+target_link_libraries(${PROJECT_NAME} PRIVATE $<BUILD_INTERFACE:cuBQL_cuda_float3_static>)

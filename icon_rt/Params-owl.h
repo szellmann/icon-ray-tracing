@@ -27,7 +27,11 @@ OWLVarDecl launchParams_owl[]
 = {
    // volume
    { "volume.handle", OWL_GROUP, OWL_OFFSETOF(LaunchParams,volume.handle) },
-   { "volume.useTriangles", OWL_BOOL, OWL_OFFSETOF(LaunchParams,volume.useTriangles) },
+   { "volume.mode", OWL_INT, OWL_OFFSETOF(LaunchParams,volume.mode) },
+   { "volume.cubql.handle", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.cubql.handle) },
+   { "volume.cubql.vertices", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.cubql.vertices) },
+   { "volume.cubql.indices", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.cubql.indices) },
+   { "volume.cubql.perVertex", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.cubql.perVertex) },
    { "volume.cells", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.cells) },
    { "volume.numCells", OWL_INT, OWL_OFFSETOF(LaunchParams,volume.numCells) },
    { "volume.bounds", OWL_USER_TYPE(box3f), OWL_OFFSETOF(LaunchParams,volume.bounds) },

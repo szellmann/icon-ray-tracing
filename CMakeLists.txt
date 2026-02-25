@@ -9,6 +9,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(common/cmake/common.cmake)
 
+add_subdirectory(submodules/cuBQL EXCLUDE_FROM_ALL)
+
 add_subdirectory(common)
 add_subdirectory(icon_rt)
 

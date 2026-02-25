@@ -16,6 +16,8 @@
 
 #pragma once
 
+// cuBQL
+#include "cuBQL/traversal/fixedBoxQuery.h"
 // common
 #include <vecmath.h>
 // ours
@@ -23,16 +25,28 @@
 
 using namespace vecmath;
 
+#define USER_GEOM_MODE 0
+#define TRIANGLE_MODE  1
+#define CUBQL_MODE     2
+
 // ========================================================
 // structs with trivial layout, no default init, etc.
 // to safely cross host/device borders
 // ========================================================
 namespace icon_rt {
 
+using bvh_t  = cuBQL::BinaryBVH<float,3>;
+
 struct Volume {
 #ifdef RTCORE
   OptixTraversableHandle handle;
-  bool useTriangles;
+  struct {
+    bvh_t *handle;
+    vec3f *vertices;
+    int *indices;
+    float *perVertex;
+  } cubql;
+  int mode; // 0=userGeom, 1=triangles, 2=umesh/cuBQL
 #endif
   ICONCell *cells;
   int numCells;
