@@ -253,14 +253,6 @@ struct Pipeline::Impl
       abort();
     }
 
-    if (cmdline.camera.vu != vec3f(0.f)) {
-      float fovy = cmdline.camera.fovy;
-      if (fovy<1e-3f) {
-        fovy=90.f;
-      }
-      fovy = fovy*M_PI/180.f;
-      camera->setOrientation(cmdline.camera.vp,cmdline.camera.vi,cmdline.camera.vu,fovy);
-    }
 #ifdef INTERACTIVE
     manip = CameraManip(camera, width, height);
 
@@ -423,6 +415,18 @@ struct Pipeline::Impl
     } else {
       width = fb->width;
       height = fb->height;
+    }
+  }
+
+  void setCamera(Camera *cam)
+  {
+    if (cmdline.camera.vu != vec3f(0.f)) {
+      float fovy = cmdline.camera.fovy;
+      if (fovy<1e-3f) {
+        fovy=90.f;
+      }
+      fovy = fovy*M_PI/180.f;
+      cam->setOrientation(cmdline.camera.vp,cmdline.camera.vi,cmdline.camera.vu,fovy);
     }
   }
 
@@ -856,6 +860,10 @@ DEF_LAUNCH_PARM_FUNC(OptixTraversableHandle)
 
 void Pipeline::setFrame(Frame *f) {
   fb = f; impl->setFrame(f);
+}
+
+void Pipeline::setCamera(Camera *cam) {
+  camera = cam; impl->setCamera(cam);
 }
 
 /*

@@ -107,7 +107,7 @@ struct Pipeline {
   int frameID{0};
 
   // Camera
-  void setCamera(Camera *cam) { camera = cam; }
+  void setCamera(Camera *cam);
   Camera *camera{nullptr};
 
   // Transfunc
