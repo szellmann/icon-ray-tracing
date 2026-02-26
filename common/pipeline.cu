@@ -678,6 +678,7 @@ struct Pipeline::Impl
     stbi_flip_vertically_on_write(1);
     stbi_write_png(fileName.c_str(), width, height, 4, pixels, 4 * width);
     printf("Output: %s\n", fileName.c_str());
+    printf("FPS: %.2f\n",1.f/fmaxf(avg_t,1e-8f));
 #endif
   }
 

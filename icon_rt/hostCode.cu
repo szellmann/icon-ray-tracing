@@ -67,6 +67,9 @@ static void parseCommandLine(int argc, char *argv[]) {
     std::string arg = argv[i];
     if (arg[0] != '-' && endsWith(arg,".ic"))
       g_appState.filepath = arg;
+    else if (arg == "-mode") {
+      g_appState.mode = std::atoi(argv[++i]);
+    }
   }
 }
 
