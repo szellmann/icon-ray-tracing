@@ -42,7 +42,7 @@ struct {
   std::string filepath;
   Transfunc transfunc;
   float unitDistance;
-  int mode;
+  int mode{TRIANGLE_MODE};
   bool accelActive;
 #ifdef RTCORE
   OWLGroup trianglesTLAS, userGeomTLAS;
@@ -245,7 +245,6 @@ extern "C" int main(int argc, char *argv[]) {
   g_appState.accelActive = true;
   pl.uiParam("Use naive accel", &g_appState.accelActive);
 
-  g_appState.mode = TRIANGLE_MODE;
   std::vector<std::string> options({
     "user geom mode",
     "triangle mode",
