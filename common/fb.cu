@@ -49,9 +49,9 @@ void Frame::resize(int w, int h)
 {
   width = w; height = h;
 #ifdef RTCORE
-  //cudaFree(fbPointer);
-  //cudaFree(fbDepth);
-  //cudaFree(accumBuffer);
+  cudaFree(fbPointer);
+  cudaFree(fbDepth);
+  cudaFree(accumBuffer);
   cudaMalloc(&fbPointer,w*h*sizeof(uint32_t));
   cudaMalloc(&fbDepth,w*h*sizeof(float));
   cudaMalloc(&accumBuffer,w*h*sizeof(vec4f));

@@ -40,12 +40,32 @@ struct vec3f;
 struct vec4f;
 
 // ==================================================================
-// general
+// misc. (for builtins)
 // ==================================================================
+
+inline __host__ __device__
+int min(int x, int y) {
+  return x<y?x:y;
+}
+
+inline __host__ __device__
+int max(int x, int y) {
+  return y<x?x:y;
+}
+
+inline __host__ __device__
+float lerp(float a, float b, float x) {
+  return x*a + (1.f-x)*b;
+}
 
 inline
 __host__ __device__ int iDivUp(int a, int b) {
   return (a+b-1)/b;
+}
+
+inline __host__ __device__
+size_t linearIndex(int x, int y, int z, int dims[3]) {
+  return z*dims[0]*dims[1] + y*size_t(dims[0]) + x;
 }
 
 
@@ -187,6 +207,16 @@ bool operator==(vec3i u, vec3i v) {
 inline __host__ __device__
 bool operator!=(vec3i u, vec3i v) {
   return !(u==v);
+}
+
+inline __host__ __device__
+vec3i min(vec3i u, vec3i v) {
+  return {min(u.x,v.x),min(u.y,v.y),min(u.z,v.z)};
+}
+
+inline __host__ __device__
+vec3i max(vec3i u, vec3i v) {
+  return {max(u.x,v.x),max(u.y,v.y),max(u.z,v.z)};
 }
 
 inline
@@ -1272,21 +1302,6 @@ interval3f operator*(const vec3f& a, const interval1f& b) {
 // ==================================================================
 
 inline __host__ __device__
-int min(int x, int y) {
-  return x<y?x:y;
-}
-
-inline __host__ __device__
-int max(int x, int y) {
-  return y<x?x:y;
-}
-
-inline __host__ __device__
-float lerp(float a, float b, float x) {
-  return x*a + (1.f-x)*b;
-}
-
-inline __host__ __device__
 vec3f lerp(vec3f a, vec3f b, float x) {
   return x*a + (1.f-x)*b;
 }
@@ -1307,13 +1322,13 @@ float clamp(float x, float a, float b) {
 }
 
 inline __host__ __device__
-vec3f clamp(vec3f x, vec3f a, vec3f b) {
+vec3i clamp(vec3i x, vec3i a, vec3i b) {
   return max(a,min(x,b));
 }
 
 inline __host__ __device__
-size_t linearIndex(int x, int y, int z, int dims[3]) {
-  return z*dims[0]*dims[1] + y*size_t(dims[0]) + x;
+vec3f clamp(vec3f x, vec3f a, vec3f b) {
+  return max(a,min(x,b));
 }
 
 
