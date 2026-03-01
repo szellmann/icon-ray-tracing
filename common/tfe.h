@@ -25,7 +25,7 @@ class TFE : private AlphaEditor
 {
  public:
   void init(const Transfunc &transfunc);
-  void drawImmediate();
+  bool drawImmediate();
 
   // Set SDL3 renderer
   void setSDL3Renderer(SDL_Renderer *renderer)

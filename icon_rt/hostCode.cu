@@ -6,6 +6,7 @@
 #include <dvr_course-common.h>
 
 // icon_rt:
+#include "DDA.h"
 #include "Params.h"
 #ifdef RTCORE
 #include "Params-owl.h"
@@ -32,6 +33,29 @@ inline void cuda_safe_call(
   }
 }
 
+inline __device__
+float atomicMin(float *address, float val) {
+  int ret = __float_as_int(*address);
+  while (val < __int_as_float(ret)) {
+    int old = ret;
+    if ((ret = atomicCAS((int *)address, old, __float_as_int(val))) == old)
+      break;
+  }
+  return __int_as_float(ret);
+}
+
+inline __device__
+float atomicMax(float *address, float val) {
+  int ret = __float_as_int(*address);
+  while (val > __int_as_float(ret)) {
+    int old = ret;
+    if ((ret = atomicCAS((int *)address, old, __float_as_int(val))) == old)
+      break;
+  }
+  return __int_as_float(ret);
+}
+
+
 // common namespace for helper classes:
 // Camera, FB, wrappers for RTX execution model, etc. etc.
 using namespace dvr_course;
@@ -43,7 +67,9 @@ struct {
   Transfunc transfunc;
   float unitDistance;
   int mode{TRIANGLE_MODE};
+  int accelMode{SPHERE_ACCEL_MODE};
   bool accelActive;
+  icon_rt::Grid gridICON, gridUMesh;
 #ifdef RTCORE
   OWLGroup trianglesTLAS, userGeomTLAS;
 #endif
@@ -112,6 +138,38 @@ static void toggleMode(Pipeline &pl, LaunchParams &parms) {
 #endif
 }
 
+static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
+#ifdef RTCORE
+  static int accelMode=SPHERE_ACCEL_MODE;
+  if (g_appState.accelMode != accelMode) {
+    if (g_appState.accelMode==GRID_ACCEL_MODE) {
+      if (g_appState.accelMode == CUBQL_MODE) {
+        pl.launchParam("volume.gridAccel.valueRanges", (RawPointer &)parms.volume.gridAccel.valueRanges)
+            = g_appState.gridUMesh.valueRanges;
+        pl.launchParam("volume.gridAccel.dims", parms.volume.gridAccel.dims)
+            = g_appState.gridUMesh.dims;
+        pl.launchParam("volume.gridAccel.worldBounds", parms.volume.gridAccel.worldBounds)
+            = g_appState.gridUMesh.worldBounds;
+        pl.launchParam("volume.gridAccel.maxOpacities", (RawPointer &)parms.volume.gridAccel.maxOpacities)
+            = g_appState.gridUMesh.maxOpacities;
+      } else {
+        pl.launchParam("volume.gridAccel.valueRanges", (RawPointer &)parms.volume.gridAccel.valueRanges)
+            = g_appState.gridICON.valueRanges;
+        pl.launchParam("volume.gridAccel.dims", parms.volume.gridAccel.dims)
+            = g_appState.gridICON.dims;
+        pl.launchParam("volume.gridAccel.worldBounds", parms.volume.gridAccel.worldBounds)
+            = g_appState.gridICON.worldBounds;
+        pl.launchParam("volume.gridAccel.maxOpacities", (RawPointer &)parms.volume.gridAccel.maxOpacities)
+            = g_appState.gridICON.maxOpacities;
+      }
+    }
+    pl.launchParam("volume.accelMode", parms.volume.accelMode) = g_appState.accelMode;
+    pl.resetAccumulation();
+  }
+  accelMode = g_appState.accelMode;
+#endif
+}
+
 __global__ void computeBounds(box3f *primBounds,
                               const vec3f *vertices,
                               const int *indices,
@@ -136,6 +194,150 @@ __global__ void computeBounds(box3f *primBounds,
   primBounds[cellID].extend(v3);
   primBounds[cellID].extend(v4);
   primBounds[cellID].extend(v5);
+}
+
+__global__ void initGrid(Grid grid)
+{
+  size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+  size_t numMCs = grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+
+  if (mcID >= numMCs)
+    return;
+
+  grid.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
+}
+
+inline __device__ void rasterizeBox(Grid grid, const box3f &box, const box1f &range)
+{
+  const vec3i loMC = projectOnGrid(box.lower,grid.dims,grid.worldBounds);
+  const vec3i upMC = projectOnGrid(box.upper,grid.dims,grid.worldBounds);
+
+  for (int mcz=loMC.z; mcz<=upMC.z; ++mcz) {
+    for (int mcy=loMC.y; mcy<=upMC.y; ++mcy) {
+      for (int mcx=loMC.x; mcx<=upMC.x; ++mcx) {
+        const vec3i mcID(mcx,mcy,mcz);
+        const size_t linearID = linearIndex(mcID,grid.dims);
+        box1f &vrange = grid.valueRanges[linearID];
+        vrange.lower = atomicMin(&vrange.lower,range.lower);
+        vrange.upper = atomicMax(&vrange.upper,range.upper);
+      }
+    }
+  }
+}
+
+__global__ void buildGrid_ICON(Grid grid,
+                               const ICONCell *cells,
+                               size_t numCells)
+{
+  size_t cellID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+
+  if (cellID >= numCells)
+    return;
+
+  const ICONCell &cell = cells[cellID];
+
+  for (int i=0; i<cell.numLayers; ++i) {
+    // rasterize box per layer
+    box3f bounds(
+      {INFINITY,INFINITY,INFINITY},
+      {-INFINITY,-INFINITY,-INFINITY}
+    );
+
+    // bottom triangle vertices
+    vec3f bv1 = toCartesian({cell.height[i],cell.lat.x,cell.lon.x});
+    vec3f bv2 = toCartesian({cell.height[i],cell.lat.y,cell.lon.y});
+    vec3f bv3 = toCartesian({cell.height[i],cell.lat.z,cell.lon.z});
+
+    bounds.extend(bv1);
+    bounds.extend(bv2);
+    bounds.extend(bv3);
+
+    // top triangle vertices
+    vec3f tv1 = toCartesian({cell.height[i+1],cell.lat.x,cell.lon.x});
+    vec3f tv2 = toCartesian({cell.height[i+1],cell.lat.y,cell.lon.y});
+    vec3f tv3 = toCartesian({cell.height[i+1],cell.lat.z,cell.lon.z});
+
+    vec3f bary = (tv1+tv2+tv3)/3.f;
+
+    float R = cell.height[i+1];
+    float D = R-length(bary);
+    float off = D/R;
+
+    tv1 += tv1*off;
+    tv2 += tv2*off;
+    tv3 += tv3*off;
+
+    bounds.extend(tv1);
+    bounds.extend(tv2);
+    bounds.extend(tv3);
+
+    box1f valueRange(INFINITY,-INFINITY);
+    valueRange.extend(cell.getValue(cell.height[i]));
+    valueRange.extend(cell.getValue(cell.height[i+1]));
+
+    rasterizeBox(grid,bounds,valueRange);
+  }
+}
+
+__global__ void buildGrid_UMesh(Grid grid,
+                                const vec3f *vertices,
+                                const float *scalars,
+                                const int *indices,
+                                size_t numElems)
+{
+  size_t cellID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+
+  if (cellID >= numElems)
+    return;
+
+  box3f cellBounds{vec3f{FLT_MAX}, vec3f{-FLT_MAX}};
+  box1f valueRange{FLT_MAX, -FLT_MAX};
+
+  const int *I = indices+cellID*6;
+  for (int i=0; i<6; ++i) {
+    const vec3f V = vertices[I[i]];
+    const float S = scalars[I[i]];
+    cellBounds.extend(V);
+    valueRange.extend(S);
+  }
+  rasterizeBox(grid,cellBounds,valueRange);
+}
+
+__global__ void computeMaxOpacities(Grid grid,
+                                    const vec4f *rgbaLUT,
+                                    int size,
+                                    box1f tf_valueRange,
+                                    box1f tf_relRange,
+                                    float tf_opacity)
+{
+  size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+  size_t numMCs = grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+
+  if (mcID >= numMCs)
+    return;
+
+  box1f valueRange = grid.valueRanges[mcID];
+
+  if (valueRange.upper < valueRange.lower) {
+    grid.maxOpacities[mcID] = 0.f;
+    return;
+  }
+
+  valueRange.lower -= tf_valueRange.lower;
+  valueRange.lower /= tf_valueRange.upper - tf_valueRange.lower;
+  valueRange.upper -= tf_valueRange.lower;
+  valueRange.upper /= tf_valueRange.upper - tf_valueRange.lower;
+
+  int lo = clamp(
+      int(valueRange.lower * (size - 1)), 0, size - 1);
+  int hi = clamp(
+      int(valueRange.upper * (size - 1)) + 1, 0, size - 1);
+
+  float maxOpacity = 0.f;
+  for (int i = lo; i <= hi; ++i) {
+    maxOpacity = fmaxf(maxOpacity, rgbaLUT[i].w);
+  }
+  grid.maxOpacities[mcID] = maxOpacity;
 }
 
 extern "C" int main(int argc, char *argv[]) {
@@ -252,6 +454,12 @@ extern "C" int main(int argc, char *argv[]) {
   });
   pl.uiParam("Sampler mode", options, &g_appState.mode);
 
+  std::vector<std::string> accelOptions({
+    "sphere accel",
+    "grid accel",
+  });
+  pl.uiParam("Accel mode", accelOptions, &g_appState.accelMode);
+
 #ifdef RTCORE
   pl.setRayGen(ptxCode, "woodcockTrackingWithAccel");
   pl.setLaunchParamsDecl(launchParams_owl, sizeof(LaunchParams));
@@ -354,7 +562,7 @@ extern "C" int main(int argc, char *argv[]) {
   std::vector<vec3f> vertexUMesh;
   std::vector<int> indexUMesh;
   std::vector<float> vertexScalars;
-  for (size_t i=0; i<cells.size(); ++i) {
+  for (size_t i=0; i<cells.size()/200; ++i) {
     const ICONCell &cell = cells[i];
     for (int h=0; h<cell.numLayers; ++h) {
       // bottom triangle:
@@ -389,6 +597,7 @@ extern "C" int main(int argc, char *argv[]) {
 
   vec3f *d_vertices{nullptr};
   int *d_indices{nullptr};
+  float *d_scalars{nullptr};
   size_t numVertices = vertexUMesh.size();
   size_t numIndices = indexUMesh.size();
   size_t numWedges = indexUMesh.size()/6;
@@ -403,6 +612,12 @@ extern "C" int main(int argc, char *argv[]) {
   CUDA_SAFE_CALL(cudaMemcpy(d_indices,
                             indexUMesh.data(),
                             sizeof(indexUMesh[0])*numIndices,
+                            cudaMemcpyHostToDevice));
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_scalars, sizeof(vertexScalars[0])*numVertices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_scalars,
+                            vertexScalars.data(),
+                            sizeof(vertexScalars[0])*numVertices,
                             cudaMemcpyHostToDevice));
 
   box3f *primBounds;
@@ -431,12 +646,61 @@ extern "C" int main(int argc, char *argv[]) {
                             vertexScalars.data(),
                             sizeof(vertexScalars[0])*numVertices,
                             cudaMemcpyHostToDevice));
+
+  // DDA grid(s)
+  g_appState.gridICON = Grid{nullptr,vec3i(256),volbounds};
+  Grid &gridICON = g_appState.gridICON;
+  size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
+  CUDA_SAFE_CALL(cudaMalloc(&gridICON.valueRanges,
+                            sizeof(gridICON.valueRanges[0])*numMC_ICON));
+  CUDA_SAFE_CALL(cudaMalloc(&gridICON.maxOpacities,
+                            sizeof(gridICON.maxOpacities[0])*numMC_ICON));
+  initGrid<<<iDivUp(numMC_ICON,1024),1024>>>(gridICON);
+  buildGrid_ICON<<<iDivUp(numCells,1024),1024>>>(gridICON,
+                                                 deviceCells.data(),
+                                                 deviceCells.size());
+
+  g_appState.gridUMesh = Grid{nullptr,vec3i(256),volbounds};
+  Grid &gridUMesh = g_appState.gridUMesh;
+  size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
+  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.valueRanges,
+                            sizeof(gridUMesh.valueRanges[0])*numMC_UMesh));
+  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.maxOpacities,
+                            sizeof(gridUMesh.maxOpacities[0])*numMC_UMesh));
+  initGrid<<<iDivUp(numMC_UMesh,1024),1024>>>(gridUMesh);
+  buildGrid_UMesh<<<iDivUp(numWedges,1024),1024>>>(gridUMesh,
+                                                   d_vertices,
+                                                   d_scalars,
+                                                   d_indices,
+                                                   numWedges);
+
+  pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
+    vec4f *d_rgbaLUT{nullptr};
+    CUDA_SAFE_CALL(cudaMalloc(&d_rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size));
+    CUDA_SAFE_CALL(cudaMemcpy(d_rgbaLUT,tf->rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size,
+                              cudaMemcpyHostToDevice));
+    computeMaxOpacities<<<iDivUp(numMC_ICON,1024),1024>>>(gridICON,
+                                                          d_rgbaLUT,
+                                                          tf->size,
+                                                          tf->valueRange,
+                                                          tf->relRange,
+                                                          tf->opacity);
+
+    computeMaxOpacities<<<iDivUp(numMC_UMesh,1024),1024>>>(gridUMesh,
+                                                           d_rgbaLUT,
+                                                           tf->size,
+                                                           tf->valueRange,
+                                                           tf->relRange,
+                                                           tf->opacity);
+    CUDA_SAFE_CALL(cudaFree(d_rgbaLUT));
+  });
 #endif
 
   // volume
 #ifdef RTCORE
   owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
   pl.launchParam("volume.mode", parms.volume.mode) = TRIANGLE_MODE;
+  pl.launchParam("volume.accelMode", parms.volume.accelMode) = SPHERE_ACCEL_MODE;
   pl.launchParam("volume.cubql.handle", (RawPointer &)parms.volume.cubql.handle) = &bvh;
   pl.launchParam("volume.cubql.vertices", (RawPointer &)parms.volume.cubql.vertices) = d_vertices;
   pl.launchParam("volume.cubql.indices", (RawPointer &)parms.volume.cubql.indices) = d_indices;
@@ -457,6 +721,7 @@ extern "C" int main(int argc, char *argv[]) {
   do {
     toggleRayGen(pl);
     toggleMode(pl,parms);
+    toggleAccelMode(pl,parms);
 
     struct {
       vec3f lower_left, horizontal, vertical;

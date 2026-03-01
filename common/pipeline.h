@@ -89,6 +89,9 @@ struct Pipeline {
 
   DECL_LAUNCH_PARM_FUNC(bool)
   DECL_LAUNCH_PARM_FUNC(int)
+  DECL_LAUNCH_PARM_FUNC(vec2i)
+  DECL_LAUNCH_PARM_FUNC(vec3i)
+  DECL_LAUNCH_PARM_FUNC(vec4i)
   DECL_LAUNCH_PARM_FUNC(float)
   DECL_LAUNCH_PARM_FUNC(vec2f)
   DECL_LAUNCH_PARM_FUNC(vec3f)
@@ -130,6 +133,9 @@ struct Pipeline {
   // Events
   typedef std::function<void(char)> KeyDownHandler;
   void setKeyDownHandler(KeyDownHandler kdh);
+
+  typedef std::function<void(const Transfunc *,int)> TransfuncUpdateHandler;
+  void setTransfuncUpdateHandler(TransfuncUpdateHandler tuh);
 
  private:
 

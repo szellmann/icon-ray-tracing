@@ -17,6 +17,7 @@
 // common
 #include <dvr_course-common.cuh>
 // icon_rt
+#include "DDA.h"
 #include "Params.h"
 #include "UElems.h"
 
@@ -246,7 +247,7 @@ bool intersectSphere(const Ray &ray, float radius, float &tnear, float &tfar) {
 }
 
 inline __device__
-bool traverseAccel(const Ray &ray, float &tnear, float &tfar) {
+bool traverseAccel(const Ray &ray, float &tnear, float &tfar, float &majorant) {
   auto &lp = optixLaunchParams;
 
   float t1,t2,t3,t4;
@@ -269,6 +270,7 @@ bool traverseAccel(const Ray &ray, float &tnear, float &tfar) {
     tnear = t3;
     tfar  = t4;
   }
+  majorant = 1.f;
   return true;
 }
 
@@ -335,28 +337,50 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
 
   ray.tmin = t0, ray.tmax = t1;
 
-  float tnear, tfar;
   vec3f color{0.f};
   float alpha{0.f};
-  while (traverseAccel(ray, tnear, tfar)) {
-    const float majorant = 1.f;
 
-    vec3f albedo = 0.f;
-    float extinction = 0.f;
+  if (lp.volume.accelMode == SPHERE_ACCEL_MODE) {
+    float tnear, tfar;
+    float majorant{1.f};
+    while (traverseAccel(ray, tnear, tfar, majorant)) {
+      vec3f albedo = 0.f;
+      float extinction = 0.f;
 
-    ray.tmin = fmaxf(ray.tmin,tnear);
-    ray.tmax = tfar;
-    float t = woodcockTracking(ray, rnd, majorant, albedo, extinction);
-    if (t < tfar) {
-      color = albedo * lp.ambientColor * lp.ambientRadiance;
-      alpha = extinction > 0.f ? 1.f : 0.f;
-      break;
+      ray.tmin = fmaxf(ray.tmin,tnear);
+      ray.tmax = tfar;
+      float t = woodcockTracking(ray, rnd, majorant, albedo, extinction);
+      if (t < tfar) {
+        color = albedo * lp.ambientColor * lp.ambientRadiance;
+        alpha = extinction > 0.f ? 1.f : 0.f;
+        break;
+      }
+      // makeshift epsilon to avoid intersecting the same
+      // spherical shell again (there are better ways to do this..)
+      const float sceneEPS = lp.volume.accel.innerRadius*1e-3f;
+      ray.tmin = tfar+sceneEPS;
     }
-    // makeshift epsilon to avoid intersecting the same
-    // spherical shell again (there are better ways to do this..)
-    const float sceneEPS = lp.volume.accel.innerRadius*1e-3f;
-    ray.tmin = tfar+sceneEPS;
+  } else {
+    auto woodcockFunc = [&](const int leafID, float t0, float t1) {
+      vec3f albedo = 0.f;
+      float extinction = 0.f;
+      const float majorant = lp.volume.gridAccel.maxOpacities[leafID];
+      ray.tmin = t0;
+      ray.tmax = t1;
+      float t = woodcockTracking(ray, rnd, majorant, albedo, extinction);
+      // if (debug()) {
+      //   printf("%f:%f %f %f\n",t0,t1,majorant,t);
+      // }
+      if (t > t0 && t < t1) {
+        color = albedo * lp.ambientColor * lp.ambientRadiance;
+        alpha = extinction > 0.f ? 1.f : 0.f;
+        return false;
+      }
+      return true; // traverse on
+    };
+    dda3(ray,lp.volume.gridAccel.dims,lp.volume.gridAccel.worldBounds,woodcockFunc);
   }
+
   float accum = 1.f/(lp.accumID+1);
   lp.accumBuffer[pixelID] = lerp(vec4f(color,alpha), lp.accumBuffer[pixelID], accum);
 

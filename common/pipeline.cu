@@ -79,11 +79,14 @@ OWLDataType mapOwlType(const T &t) { return OWL_USER_TYPE(t); }
 OWLDataType mapOwlType(RawPointer) { return OWL_RAW_POINTER; }
 OWLDataType mapOwlType(OptixTraversableHandle) { return OWL_GROUP; }
 OWLDataType mapOwlType(bool) { return OWL_BOOL; }
+OWLDataType mapOwlType(int) { return OWL_INT; }
+OWLDataType mapOwlType(vecmath::vec2i) { return OWL_INT2; }
+OWLDataType mapOwlType(vecmath::vec3i) { return OWL_INT3; }
+OWLDataType mapOwlType(vecmath::vec4i) { return OWL_INT4; }
 OWLDataType mapOwlType(float) { return OWL_FLOAT; }
 OWLDataType mapOwlType(vecmath::vec2f) { return OWL_FLOAT2; }
 OWLDataType mapOwlType(vecmath::vec3f) { return OWL_FLOAT3; }
 OWLDataType mapOwlType(vecmath::vec4f) { return OWL_FLOAT4; }
-OWLDataType mapOwlType(int) { return OWL_INT; }
 // ... TODO
 #endif
 
@@ -253,6 +256,11 @@ struct Pipeline::Impl
       abort();
     }
 
+    if (transfuncUpdateHandler) {
+      for (int i=0; i<transfuncs.size(); ++i) {
+        transfuncUpdateHandler(transfuncs[i],i);
+      }
+    }
 #ifdef INTERACTIVE
     manip = CameraManip(camera, width, height);
 
@@ -368,6 +376,18 @@ struct Pipeline::Impl
         int i1 = *(int *)lp.value;
         owlParamsSet1i(owl.launchParams, name.c_str(), i1);
       }
+      else if (lp.type == OWL_INT2) {
+        vec2i i2 = *(vec2i *)lp.value;
+        owlParamsSet2i(owl.launchParams, name.c_str(), i2.x, i2.y);
+      }
+      else if (lp.type == OWL_INT3) {
+        vec3i i3 = *(vec3i *)lp.value;
+        owlParamsSet3i(owl.launchParams, name.c_str(), i3.x, i3.y, i3.z);
+      }
+      else if (lp.type == OWL_INT4) {
+        vec4i i4 = *(vec4i *)lp.value;
+        owlParamsSet4i(owl.launchParams, name.c_str(), i4.x, i4.y, i4.z, i4.w);
+      }
       else if (lp.type == OWL_BOOL) {
         bool b1 = *(bool *)lp.value;
         owlParamsSet1b(owl.launchParams, name.c_str(), b1);
@@ -449,6 +469,9 @@ struct Pipeline::Impl
       transfuncs[index]->setLUT(newLUT);
     }
 #endif
+    if (transfuncUpdateHandler) {
+      transfuncUpdateHandler(tf,index);
+    }
   }
 
   void pollEvents(bool &quit, bool &cameraUpdate, bool &windowResize)
@@ -606,13 +629,21 @@ struct Pipeline::Impl
     ImGui::Begin("Settings");//, nullptr, window_flags);
     ImGui::LabelText("##TFE", "TFE");
     if (transfuncs.size() == 1) {
-      tfe[0].drawImmediate();
+      if (tfe[0].drawImmediate()) {
+        if (transfuncUpdateHandler) {
+          transfuncUpdateHandler(transfuncs[0],0);
+        }
+      }
     } else {
       if (ImGui::BeginTabBar("Lookup Tables")) {
         for (int i=0; i<transfuncs.size(); ++i) {
           ImGui::PushID(i);
           if (ImGui::BeginTabItem(std::to_string(i).c_str())) {
-            tfe[i].drawImmediate();
+            if (tfe[i].drawImmediate()) {
+              if (transfuncUpdateHandler) {
+                transfuncUpdateHandler(transfuncs[i],i);
+              }
+            }
             ImGui::EndTabItem();
             tfID = i;
           }
@@ -692,6 +723,7 @@ struct Pipeline::Impl
   std::vector<TFE> tfe;
   int tfID{0};
 #endif
+  Pipeline::TransfuncUpdateHandler transfuncUpdateHandler = 0;
   Frame *fb{nullptr};
   std::vector<Transfunc *> transfuncs;
   Transfunc ourTransfunc;
@@ -848,6 +880,9 @@ T &Pipeline::launchParam(std::string name, T &value) {        \
 
 DEF_LAUNCH_PARM_FUNC(bool)
 DEF_LAUNCH_PARM_FUNC(int)
+DEF_LAUNCH_PARM_FUNC(vec2i)
+DEF_LAUNCH_PARM_FUNC(vec3i)
+DEF_LAUNCH_PARM_FUNC(vec4i)
 DEF_LAUNCH_PARM_FUNC(float)
 DEF_LAUNCH_PARM_FUNC(vec2f)
 DEF_LAUNCH_PARM_FUNC(vec3f)
@@ -1017,6 +1052,10 @@ void Pipeline::setKeyDownHandler(KeyDownHandler kdh) {
 #ifdef INTERACTIVE
   impl->keyDownHandler = kdh;
 #endif
+}
+
+void Pipeline::setTransfuncUpdateHandler(TransfuncUpdateHandler tuh) {
+  impl->transfuncUpdateHandler = tuh;
 }
 
 } // namespace dvr_course

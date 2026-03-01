@@ -25,9 +25,12 @@
 
 using namespace vecmath;
 
-#define USER_GEOM_MODE 0
-#define TRIANGLE_MODE  1
-#define CUBQL_MODE     2
+#define USER_GEOM_MODE    0
+#define TRIANGLE_MODE     1
+#define CUBQL_MODE        2
+
+#define SPHERE_ACCEL_MODE 0
+#define GRID_ACCEL_MODE   1
 
 // ========================================================
 // structs with trivial layout, no default init, etc.
@@ -36,6 +39,13 @@ using namespace vecmath;
 namespace icon_rt {
 
 using bvh_t  = cuBQL::BinaryBVH<float,3>;
+
+struct Grid {
+  box1f *valueRanges;
+  vec3i dims;
+  box3f worldBounds;
+  float *maxOpacities;
+};
 
 struct Volume {
 #ifdef RTCORE
@@ -60,6 +70,9 @@ struct Volume {
   struct {
     float innerRadius, outerRadius;
   } accel;
+  // grid accel for testing against:
+  Grid gridAccel;
+  int accelMode;
 };
 
 struct Transfunc {

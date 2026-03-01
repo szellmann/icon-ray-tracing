@@ -26,7 +26,7 @@ void TFE::init(const Transfunc &transfunc) {
   opacityScale = transfunc.opacity;
 }
 
-void TFE::drawImmediate() {
+bool TFE::drawImmediate() {
   AlphaEditor::drawImmediate();
 
   if (ImGui::DragFloatRange2("Range", &range.lower, &range.upper,
@@ -45,6 +45,8 @@ void TFE::drawImmediate() {
   // if (ImGui::Button("Save")) {
   //   saveToFile(saveFilename.c_str());
   // }
+
+  return updated();
 }
 
 bool TFE::updated() const {
