@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "vecmath.h"
 
 namespace dvr_course {
