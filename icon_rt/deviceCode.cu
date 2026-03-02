@@ -94,23 +94,24 @@ inline __device__ bool sampleVolume(const Volume &vol, vec3f pos, float &value)
       (const uint32_t primID)
     {
       const int *I = vol.cubql.indices + primID*6;
-      const float v = vol.cubql.perVertex[primID*6+0];
+      const float *S = vol.cubql.perVertex;
       // Hack direction vector into w:
-      const vec4f v0(vol.cubql.vertices[I[0]],v);
-      const vec4f v1(vol.cubql.vertices[I[1]],v);
-      const vec4f v2(vol.cubql.vertices[I[2]],v);
-      const vec4f v3(vol.cubql.vertices[I[3]],v);
-      const vec4f v4(vol.cubql.vertices[I[4]],v);
-      const vec4f v5(vol.cubql.vertices[I[5]],v);
-      if (intersectWedgeEXT(value,pos,v0,v1,v2,v3,v4,v5)) {
+      const vec4f v0(vol.cubql.vertices[I[0]],vol.cubql.perVertex[I[0]]);
+      const vec4f v1(vol.cubql.vertices[I[1]],vol.cubql.perVertex[I[1]]);
+      const vec4f v2(vol.cubql.vertices[I[2]],vol.cubql.perVertex[I[2]]);
+      const vec4f v3(vol.cubql.vertices[I[3]],vol.cubql.perVertex[I[3]]);
+      const vec4f v4(vol.cubql.vertices[I[4]],vol.cubql.perVertex[I[4]]);
+      const vec4f v5(vol.cubql.vertices[I[5]],vol.cubql.perVertex[I[5]]);
+      float v;
+      if (intersectWedgeEXT(v,pos,v0,v1,v2,v3,v4,v5)) {
         hit = true;
         value = v;
         return CUBQL_TERMINATE_TRAVERSAL;
       }
       return CUBQL_CONTINUE_TRAVERSAL;
     };
-    if (hit) printf("%f\n",value);
-    cuBQL::fixedBoxQuery::forEachPrim(lambda,*vol.cubql.handle,box);
+    //if (debug()) printf("handle:%i\n",vol.cubql.handle->numNodes);
+    cuBQL::fixedBoxQuery::forEachPrim(lambda,vol.cubql.handle,box);
     return hit;
   }
 #else

@@ -114,7 +114,7 @@ struct ICONCell {
     return bounds;
   }
 
-  inline __device__ float getValue(float hpos) const
+  inline __host__ __device__ float getValue(float hpos) const
   {
     // interpolate value
     for (int i=0; i<numLayers; ++i) {

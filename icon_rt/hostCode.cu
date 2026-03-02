@@ -562,7 +562,7 @@ extern "C" int main(int argc, char *argv[]) {
   std::vector<vec3f> vertexUMesh;
   std::vector<int> indexUMesh;
   std::vector<float> vertexScalars;
-  for (size_t i=0; i<cells.size()/200; ++i) {
+  for (size_t i=0; i<cells.size(); ++i) {
     const ICONCell &cell = cells[i];
     for (int h=0; h<cell.numLayers; ++h) {
       // bottom triangle:
@@ -573,18 +573,19 @@ extern "C" int main(int argc, char *argv[]) {
       vec3f tv1 = toCartesian({cell.height[h+1],cell.lat.x,cell.lon.x});
       vec3f tv2 = toCartesian({cell.height[h+1],cell.lat.y,cell.lon.y});
       vec3f tv3 = toCartesian({cell.height[h+1],cell.lat.z,cell.lon.z});
-      // value: (to-do: interpol)
-      float v = cell.value[h];
+      // value:
+      float bv = cell.getValue(cell.height[h]);
+      float tv = cell.getValue(cell.height[h+1]);
       
       int idx0 = vertexUMesh.size();
 
-      vertexUMesh.push_back(bv1); vertexScalars.push_back(v);
-      vertexUMesh.push_back(bv2); vertexScalars.push_back(v);
-      vertexUMesh.push_back(bv3); vertexScalars.push_back(v);
+      vertexUMesh.push_back(bv1); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(bv2); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(bv3); vertexScalars.push_back(bv);
 
-      vertexUMesh.push_back(tv1); vertexScalars.push_back(v);
-      vertexUMesh.push_back(tv2); vertexScalars.push_back(v);
-      vertexUMesh.push_back(tv3); vertexScalars.push_back(v);
+      vertexUMesh.push_back(tv1); vertexScalars.push_back(tv);
+      vertexUMesh.push_back(tv2); vertexScalars.push_back(tv);
+      vertexUMesh.push_back(tv3); vertexScalars.push_back(tv);
 
       indexUMesh.push_back(idx0+0);
       indexUMesh.push_back(idx0+1);
@@ -701,7 +702,7 @@ extern "C" int main(int argc, char *argv[]) {
   owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
   pl.launchParam("volume.mode", parms.volume.mode) = TRIANGLE_MODE;
   pl.launchParam("volume.accelMode", parms.volume.accelMode) = SPHERE_ACCEL_MODE;
-  pl.launchParam("volume.cubql.handle", (RawPointer &)parms.volume.cubql.handle) = &bvh;
+  owlParamsSetRaw(pl.owlLaunchParams(), "volume.cubql.handle", &bvh);
   pl.launchParam("volume.cubql.vertices", (RawPointer &)parms.volume.cubql.vertices) = d_vertices;
   pl.launchParam("volume.cubql.indices", (RawPointer &)parms.volume.cubql.indices) = d_indices;
   pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = d_perVertex;

@@ -51,7 +51,7 @@ struct Volume {
 #ifdef RTCORE
   OptixTraversableHandle handle;
   struct {
-    bvh_t *handle;
+    bvh_t handle;
     vec3f *vertices;
     int *indices;
     float *perVertex;
