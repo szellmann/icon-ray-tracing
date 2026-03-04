@@ -181,17 +181,17 @@ void clearFramebuffer(const Frame *fb,
 #endif
     [=] __device__ (int x, int y) {
       int pixelID = x+y*width;
-      if (fb->fbPointer) {
-        fb->fbPointer[pixelID] = make_rgba(rgba);
-      }
+      // if (fb->fbPointer) {
+      //   fb->fbPointer[pixelID] = make_rgba(rgba);
+      // }
 
-      if (fb->fbDepth) {
-        fb->fbDepth[pixelID] = depth;
-      }
+      // if (fb->fbDepth) {
+      //   fb->fbDepth[pixelID] = depth;
+      // }
 
-      if (fb->accumBuffer) {
-        fb->accumBuffer[pixelID] = vec4f(0.f);
-      }
+      // if (fb->accumBuffer) {
+      //   fb->accumBuffer[pixelID] = vec4f(0.f);
+      // }
     });
 }
 

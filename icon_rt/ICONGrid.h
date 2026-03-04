@@ -122,12 +122,16 @@ struct ICONCell {
       float h1 = height[i+1];
   
       if (hpos >= h0 && hpos <= h1) {
+      #if 1
+        return value[i];
+      #else
         int i_prev = i==0 ? i : i-1;
         int i_next = i<numLayers-1 ? i+1 : i;
         float v0 = (value[i_prev] + value[i]) * 0.5f;
         float v1 = (value[i] + value[i_next]) * 0.5f;
         float f = (hpos-h0)/(h1-h0);
         return v0*(1.f-f) + v1*f;
+      #endif
       }
     }
     // should never get here!

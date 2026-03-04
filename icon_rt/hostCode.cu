@@ -583,9 +583,15 @@ extern "C" int main(int argc, char *argv[]) {
       vertexUMesh.push_back(bv2); vertexScalars.push_back(bv);
       vertexUMesh.push_back(bv3); vertexScalars.push_back(bv);
 
+#if 1
+      vertexUMesh.push_back(tv1); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(tv2); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(tv3); vertexScalars.push_back(bv);
+#else
       vertexUMesh.push_back(tv1); vertexScalars.push_back(tv);
       vertexUMesh.push_back(tv2); vertexScalars.push_back(tv);
       vertexUMesh.push_back(tv3); vertexScalars.push_back(tv);
+#endif
 
       indexUMesh.push_back(idx0+0);
       indexUMesh.push_back(idx0+1);
