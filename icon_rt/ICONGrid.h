@@ -119,7 +119,7 @@ struct ICONCell {
   #if 1
     const float *it;
     const float *first = height;
-    const float *last = height+numLayers+1;
+    const float *last = height+numLayers;
     int count, step;
     count = (last-first);
     while (count > 0) {
