@@ -45,6 +45,7 @@ OWLVarDecl launchParams_owl[]
    { "volume.accelMode", OWL_INT, OWL_OFFSETOF(LaunchParams,volume.accelMode) },
    // xf data
    { "transfunc.valueRange", OWL_USER_TYPE(box1f), OWL_OFFSETOF(LaunchParams,transfunc.valueRange) },
+   { "transfunc.opacityScale", OWL_FLOAT, OWL_OFFSETOF(LaunchParams,transfunc.opacityScale) },
    { "transfunc.values", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,transfunc.values) },
    { "transfunc.size", OWL_INT, OWL_OFFSETOF(LaunchParams,transfunc.size) },
    // camera settings

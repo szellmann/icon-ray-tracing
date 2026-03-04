@@ -77,6 +77,7 @@ struct Volume {
 
 struct Transfunc {
   box1f  valueRange;
+  float opacityScale;
   vec4f *values;
   int size;
 };

@@ -978,6 +978,10 @@ bool Pipeline::isRunning() {
       impl->transfuncs[tfID]->valueRange = impl->tfe[tfID].getRange();
       resetAccum = true;
     }
+    if (impl->tfe[tfID].scaleUpdated()) {
+      impl->transfuncs[tfID]->opacity = impl->tfe[tfID].getOpacityScale();
+      resetAccum = true;
+    }
   }
 #endif
 

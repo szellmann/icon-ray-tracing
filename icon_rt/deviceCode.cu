@@ -132,7 +132,7 @@ inline __device__ vec4f postClassify(Transfunc tf, float v)
   float frac = (v*tf.size)-idx;
   vec4f v1 = tf.values[clamp(idx,0,tf.size-1)];
   vec4f v2 = tf.values[clamp(idx+1,0,tf.size-1)];
-  return v1*frac+v2*(1.f-frac);
+  return v1*frac+v2*(1.f-frac)*vec4f(1,1,1,tf.opacityScale);
 }
 
 inline __device__ float woodcockTracking(const Ray &ray,

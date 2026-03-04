@@ -574,8 +574,8 @@ extern "C" int main(int argc, char *argv[]) {
       vec3f tv2 = toCartesian({cell.height[h+1],cell.lat.y,cell.lon.y});
       vec3f tv3 = toCartesian({cell.height[h+1],cell.lat.z,cell.lon.z});
       // value:
-      float bv = cell.getValue(cell.height[h]);
-      float tv = cell.getValue(cell.height[h+1]);
+      float bv = h==0?cell.getValue(cell.height[h]):(cell.getValue(cell.height[h-1])+cell.getValue(cell.height[h]))*0.5f;
+      float tv = h<cell.numLayers-1?(cell.getValue(cell.height[h])+cell.getValue(cell.height[h+1]))*0.5f:cell.getValue(cell.height[h+1]);
       
       int idx0 = vertexUMesh.size();
 
@@ -736,6 +736,7 @@ extern "C" int main(int argc, char *argv[]) {
     pl.launchParam("camera.dir_dv", parms.camera.dir_dv) = screen.vertical / imgHeight;
     // update transfunc:
     pl.launchParam("transfunc.valueRange", parms.transfunc.valueRange) = pl.getTransfunc()->valueRange;
+    pl.launchParam("transfunc.opacityScale", parms.transfunc.opacityScale) = pl.getTransfunc()->opacity;
     pl.launchParam("transfunc.size", parms.transfunc.size) = pl.getTransfunc()->size;
     pl.launchParam("transfunc.values", (RawPointer &)parms.transfunc.values) = pl.getTransfunc()->rgbaLUT;
     // update framebuffer:
