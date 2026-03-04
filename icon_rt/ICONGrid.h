@@ -114,28 +114,53 @@ struct ICONCell {
     return bounds;
   }
 
+  inline __host__ __device__ int findHeight(float hpos) const
+  {
+  #if 1
+    const float *it;
+    const float *first = height;
+    const float *last = height+numLayers+1;
+    int count, step;
+    count = (last-first);
+    while (count > 0) {
+      it = first;
+      step=count/2;
+      it = it + step;
+      if (!(hpos <= *(it+1))) {
+        first=++it;
+        count-=step+1;
+      }
+      else count=step;
+    }
+    return first-height;
+  #else
+    for (int i=0; i<numLayers; ++i) {
+      float h1 = height[i+1];
+      if (hpos <= h1) {
+        return i;
+      }
+    }
+    return -1; // should never get here!
+  #endif
+  }
+
   inline __host__ __device__ float getValue(float hpos) const
   {
     // interpolate value
-    for (int i=0; i<numLayers; ++i) {
-      float h0 = height[i];
-      float h1 = height[i+1];
-  
-      if (hpos >= h0 && hpos <= h1) {
-      #if 1
-        return value[i];
-      #else
-        int i_prev = i==0 ? i : i-1;
-        int i_next = i<numLayers-1 ? i+1 : i;
-        float v0 = (value[i_prev] + value[i]) * 0.5f;
-        float v1 = (value[i] + value[i_next]) * 0.5f;
-        float f = (hpos-h0)/(h1-h0);
-        return v0*(1.f-f) + v1*f;
-      #endif
-      }
-    }
-    // should never get here!
-    return {};
+    int i = findHeight(hpos);
+
+    #if 1
+    return value[i];
+    #else
+    float h0 = height[i];
+    float h1 = height[i+1];
+    int i_prev = i==0 ? i : i-1;
+    int i_next = i<numLayers-1 ? i+1 : i;
+    float v0 = (value[i_prev] + value[i]) * 0.5f;
+    float v1 = (value[i] + value[i_next]) * 0.5f;
+    float f = (hpos-h0)/(h1-h0);
+    return v0*(1.f-f) + v1*f;
+    #endif
   }
 
 };
