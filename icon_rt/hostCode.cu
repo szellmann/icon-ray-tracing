@@ -67,13 +67,24 @@ struct {
   int maxNumCells{-1}; // only load the first 'maxNumCells' from the data
   Transfunc transfunc;
   float unitDistance;
+  box3f volbounds;
   int mode{TRIANGLE_MODE};
   int accelMode{SPHERE_ACCEL_MODE};
   bool accelActive;
-  icon_rt::Grid gridICON, gridUMesh;
-#ifdef RTCORE
-  OWLGroup trianglesTLAS, userGeomTLAS;
-#endif
+  icon_rt::Grid gridICON{nullptr,vec3i(0),volbounds};
+  icon_rt::Grid gridUMesh{nullptr,vec3i(0),volbounds};
+  OWLGroup trianglesTLAS{0}, userGeomTLAS{0};
+  std::vector<icon_rt::ICONCell> cells;
+  Buffer<icon_rt::ICONCell> deviceCells;
+  struct {
+    icon_rt::bvh_t bvh;
+    vec3f *d_vertices{nullptr};
+    int *d_indices{nullptr};
+    float *d_scalars{nullptr};
+    size_t numVertices{0};
+    size_t numCells{0};
+    bool ready{false};
+  } cubql;
 } g_appState;
 
 namespace icon_rt {
@@ -103,21 +114,20 @@ static void parseCommandLine(int argc, char *argv[]) {
   }
 }
 
+static void buildTriangleAccel(Pipeline &pl);
+static void buildUserGeomAccel(Pipeline &pl);
+static void buildCuBQLAccel(Pipeline &pl);
+
+static void buildICONGrid(Pipeline &pl);
+static void buildCuBQLGrid(Pipeline &pl);
+
 static void toggleRayGen(Pipeline &pl) {
   static bool accelActive=true;
   if (g_appState.accelActive != accelActive) {
     if (g_appState.accelActive) {
-#ifdef RTCORE
       pl.setRayGen("woodcockTrackingWithAccel");
-#else
-      pl.setRayGen(woodcockTrackingWithAccel);
-#endif
     } else {
-#ifdef RTCORE
       pl.setRayGen("woodcockTrackingAE");
-#else
-      pl.setRayGen(woodcockTrackingAE);
-#endif
     }
     pl.resetAccumulation();
   }
@@ -125,12 +135,13 @@ static void toggleRayGen(Pipeline &pl) {
 }
 
 static void toggleMode(Pipeline &pl, LaunchParams &parms) {
-#ifdef RTCORE
   static int mode=TRIANGLE_MODE;
   if (g_appState.mode != mode) {
     if (g_appState.mode==TRIANGLE_MODE) {
       owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
     } else if (g_appState.mode==USER_GEOM_MODE) {
+      if (!g_appState.userGeomTLAS) {
+      }
       owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.userGeomTLAS);
     } else if (g_appState.mode==CUBQL_MODE) {
       //todo
@@ -138,12 +149,11 @@ static void toggleMode(Pipeline &pl, LaunchParams &parms) {
     pl.launchParam("volume.mode", parms.volume.mode) = g_appState.mode;
     pl.resetAccumulation();
   }
+
   mode = g_appState.mode;
-#endif
 }
 
 static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
-#ifdef RTCORE
   static int accelMode=SPHERE_ACCEL_MODE;
   if (g_appState.accelMode != accelMode) {
     if (g_appState.accelMode==GRID_ACCEL_MODE) {
@@ -171,33 +181,6 @@ static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
     pl.resetAccumulation();
   }
   accelMode = g_appState.accelMode;
-#endif
-}
-
-__global__ void computeBounds(box3f *primBounds,
-                              const vec3f *vertices,
-                              const int *indices,
-                              size_t numCells)
-{
-  size_t cellID = threadIdx.x+blockIdx.x*blockDim.x;
-  if (cellID >= numCells) return;
-
-  const int *I = indices + cellID*6;
-  const vec3f v0 = vertices[I[0]];
-  const vec3f v1 = vertices[I[1]];
-  const vec3f v2 = vertices[I[2]];
-  const vec3f v3 = vertices[I[3]];
-  const vec3f v4 = vertices[I[4]];
-  const vec3f v5 = vertices[I[5]];
-
-  // primBounds:
-  primBounds[cellID] = box3f(vec3f(1e31f),vec3f(-1e31f));
-  primBounds[cellID].extend(v0);
-  primBounds[cellID].extend(v1);
-  primBounds[cellID].extend(v2);
-  primBounds[cellID].extend(v3);
-  primBounds[cellID].extend(v4);
-  primBounds[cellID].extend(v5);
 }
 
 __global__ void initGrid(Grid grid)
@@ -344,6 +327,257 @@ __global__ void computeMaxOpacities(Grid grid,
   grid.maxOpacities[mcID] = maxOpacity;
 }
 
+// ######################################################
+// variant with triangle geometry
+// ######################################################
+
+static void buildTriangleAccel(Pipeline &pl) {
+  std::vector<ICONCell> &cells = g_appState.cells;
+  std::vector<vec3f> vertex;
+  std::vector<vec3i> index;
+  for (size_t i=0; i<cells.size(); ++i) {
+    const ICONCell &cell = cells[i];
+    vec3f v1 = toCartesian({cell.height[0],cell.lat.x,cell.lon.x});
+    vec3f v2 = toCartesian({cell.height[0],cell.lat.y,cell.lon.y});
+    vec3f v3 = toCartesian({cell.height[0],cell.lat.z,cell.lon.z});
+    vertex.push_back(v1);
+    vertex.push_back(v2);
+    vertex.push_back(v3);
+    index.push_back({int(i)*3,int(i)*3+1,int(i)*3+2});
+  }
+
+  OWLVarDecl trianglesGeomVars[] = {
+    { "index",  OWL_BUFPTR, OWL_OFFSETOF(ICONTriangleGeom,index)},
+    { "vertex", OWL_BUFPTR, OWL_OFFSETOF(ICONTriangleGeom,vertex)},
+    { nullptr /* sentinel to mark end of list */ }
+  };
+  OWLGeomType trianglesGeomType = owlGeomTypeCreate(pl.owlContext(),
+                                                    OWL_TRIANGLES,
+                                                    sizeof(ICONTriangleGeom),
+                                                    trianglesGeomVars,-1);
+  owlGeomTypeSetClosestHit(trianglesGeomType, 0, pl.owlModule(), "ICONTrianglesClosestHit");
+  OWLBuffer vertexBuffer
+    = owlDeviceBufferCreate(pl.owlContext(),OWL_FLOAT3,vertex.size(),vertex.data());
+  OWLBuffer indexBuffer
+    = owlDeviceBufferCreate(pl.owlContext(),OWL_INT3,index.size(),index.data());
+
+  OWLGeom trianglesGeom = owlGeomCreate(pl.owlContext(),trianglesGeomType);
+
+  owlTrianglesSetVertices(trianglesGeom,vertexBuffer,vertex.size(),sizeof(vec3f),0);
+  owlTrianglesSetIndices(trianglesGeom,indexBuffer,index.size(),sizeof(vec3i),0);
+
+  owlGeomSetBuffer(trianglesGeom,"vertex",vertexBuffer);
+  owlGeomSetBuffer(trianglesGeom,"index",indexBuffer);
+
+  OWLGroup trianglesBLAS = owlTrianglesGeomGroupCreate(pl.owlContext(),1,&trianglesGeom);
+  owlGroupBuildAccel(trianglesBLAS);
+
+  g_appState.trianglesTLAS = owlInstanceGroupCreate(pl.owlContext(),1,&trianglesBLAS);
+  owlGroupBuildAccel(g_appState.trianglesTLAS);
+}
+
+// ######################################################
+// variant with user geometry
+// ######################################################
+
+static void buildUserGeomAccel(Pipeline &pl) {
+  std::vector<ICONCell> &cells = g_appState.cells;
+
+  OWLVarDecl iconGeomVars[]
+  = {
+     { "cells",  OWL_BUFPTR, OWL_OFFSETOF(ICONGrid,cells)},
+     { "numCells",  OWL_UINT, OWL_OFFSETOF(ICONGrid,numCells)},
+     { nullptr /* sentinel to mark end of list */ }
+  };
+  OWLGeomType userGeomType = owlGeomTypeCreate(pl.owlContext(),
+                                               OWL_GEOM_USER,
+                                               sizeof(ICONGrid),
+                                               iconGeomVars, -1);
+  owlGeomTypeSetBoundsProg(userGeomType, pl.owlModule(), "ICONCellBounds");
+  owlGeomTypeSetIntersectProg(userGeomType, 0, pl.owlModule(), "ICONCellIntersect");
+  owlGeomTypeSetClosestHit(userGeomType, 0, pl.owlModule(), "ICONCellClosestHit");
+
+  OWLGeom userGeom = owlGeomCreate(pl.owlContext(), userGeomType);
+  owlGeomSetPrimCount(userGeom, cells.size());
+
+  OWLBuffer cellBuffer = owlDeviceBufferCreate(pl.owlContext(),
+                                               OWL_USER_TYPE(ICONCell{}),
+                                               cells.size(),
+                                               cells.data());
+  owlGeomSetBuffer(userGeom, "cells", cellBuffer);
+  owlGeomSet1ui(userGeom, "numCells", (unsigned)cells.size());
+
+  owlBuildPrograms(pl.owlContext());
+
+  OWLGroup userGeomBLAS = owlUserGeomGroupCreate(pl.owlContext(), 1, &userGeom);
+  owlGroupBuildAccel(userGeomBLAS);
+
+  g_appState.userGeomTLAS = owlInstanceGroupCreate(pl.owlContext(), 1);
+  owlInstanceGroupSetChild(g_appState.userGeomTLAS, 0, userGeomBLAS);
+
+  owlGroupBuildAccel(g_appState.userGeomTLAS);
+}
+
+// ######################################################
+// umesh variant
+// ######################################################
+
+__global__ void computeBounds(box3f *primBounds,
+                              const vec3f *vertices,
+                              const int *indices,
+                              size_t numCells)
+{
+  size_t cellID = threadIdx.x+blockIdx.x*blockDim.x;
+  if (cellID >= numCells) return;
+
+  const int *I = indices + cellID*6;
+  const vec3f v0 = vertices[I[0]];
+  const vec3f v1 = vertices[I[1]];
+  const vec3f v2 = vertices[I[2]];
+  const vec3f v3 = vertices[I[3]];
+  const vec3f v4 = vertices[I[4]];
+  const vec3f v5 = vertices[I[5]];
+
+  // primBounds:
+  primBounds[cellID] = box3f(vec3f(1e31f),vec3f(-1e31f));
+  primBounds[cellID].extend(v0);
+  primBounds[cellID].extend(v1);
+  primBounds[cellID].extend(v2);
+  primBounds[cellID].extend(v3);
+  primBounds[cellID].extend(v4);
+  primBounds[cellID].extend(v5);
+}
+
+static void buildCuBQLAccel(Pipeline &pl) {
+  std::vector<ICONCell> &cells = g_appState.cells;
+  std::vector<vec3f> vertexUMesh;
+  std::vector<int> indexUMesh;
+  std::vector<float> vertexScalars;
+  for (size_t i=0; i<cells.size(); ++i) {
+    const ICONCell &cell = cells[i];
+    for (int h=0; h<cell.numLayers; ++h) {
+      // bottom triangle:
+      vec3f bv1 = toCartesian({cell.height[h],cell.lat.x,cell.lon.x});
+      vec3f bv2 = toCartesian({cell.height[h],cell.lat.y,cell.lon.y});
+      vec3f bv3 = toCartesian({cell.height[h],cell.lat.z,cell.lon.z});
+      //top triangle:
+      vec3f tv1 = toCartesian({cell.height[h+1],cell.lat.x,cell.lon.x});
+      vec3f tv2 = toCartesian({cell.height[h+1],cell.lat.y,cell.lon.y});
+      vec3f tv3 = toCartesian({cell.height[h+1],cell.lat.z,cell.lon.z});
+      // value:
+      float bv = h==0?cell.getValue(cell.height[h]):(cell.getValue(cell.height[h-1])+cell.getValue(cell.height[h]))*0.5f;
+      float tv = h<cell.numLayers-1?(cell.getValue(cell.height[h])+cell.getValue(cell.height[h+1]))*0.5f:cell.getValue(cell.height[h+1]);
+      
+      int idx0 = vertexUMesh.size();
+
+      vertexUMesh.push_back(bv1); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(bv2); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(bv3); vertexScalars.push_back(bv);
+
+#if 1
+      vertexUMesh.push_back(tv1); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(tv2); vertexScalars.push_back(bv);
+      vertexUMesh.push_back(tv3); vertexScalars.push_back(bv);
+#else
+      vertexUMesh.push_back(tv1); vertexScalars.push_back(tv);
+      vertexUMesh.push_back(tv2); vertexScalars.push_back(tv);
+      vertexUMesh.push_back(tv3); vertexScalars.push_back(tv);
+#endif
+
+      indexUMesh.push_back(idx0+0);
+      indexUMesh.push_back(idx0+1);
+      indexUMesh.push_back(idx0+2);
+      indexUMesh.push_back(idx0+3);
+      indexUMesh.push_back(idx0+4);
+      indexUMesh.push_back(idx0+5);
+    }
+  }
+
+  size_t numVertices = vertexUMesh.size();
+  size_t numIndices = indexUMesh.size();
+  size_t numWedges = indexUMesh.size()/6;
+
+  g_appState.cubql.numVertices = numVertices;
+  g_appState.cubql.numCells = numWedges;
+
+  auto &d_vertices = g_appState.cubql.d_vertices;
+  auto &d_indices = g_appState.cubql.d_indices;
+  auto &d_scalars = g_appState.cubql.d_scalars;
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_vertices, sizeof(vertexUMesh[0])*numVertices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_vertices,
+                            vertexUMesh.data(),
+                            sizeof(vertexUMesh[0])*numVertices,
+                            cudaMemcpyHostToDevice));
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_indices, sizeof(indexUMesh[0])*numIndices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_indices,
+                            indexUMesh.data(),
+                            sizeof(indexUMesh[0])*numIndices,
+                            cudaMemcpyHostToDevice));
+
+  CUDA_SAFE_CALL(cudaMalloc(&d_scalars, sizeof(vertexScalars[0])*numVertices));
+  CUDA_SAFE_CALL(cudaMemcpy(d_scalars,
+                            vertexScalars.data(),
+                            sizeof(vertexScalars[0])*numVertices,
+                            cudaMemcpyHostToDevice));
+
+  box3f *primBounds;
+  CUDA_SAFE_CALL(cudaMalloc(&primBounds, sizeof(primBounds[0])*numWedges));
+
+  computeBounds<<<iDivUp(numWedges,1024),1024>>>(primBounds,
+                                                 d_vertices,
+                                                 d_indices,
+                                                 numWedges);
+
+  cuBQL::DeviceMemoryResource memResource;
+  cuBQL::gpuBuilder(g_appState.cubql.bvh,
+                    (const cuBQL::box_t<float,3>*)primBounds,
+                    numWedges,
+                    cuBQL::BuildConfig(),
+                    0,
+                    memResource);
+
+  CUDA_SAFE_CALL(cudaFree(primBounds));
+
+  g_appState.cubql.ready = true;
+}
+
+static void buildICONGrid(Pipeline &pl) {
+  box3f &volbounds = g_appState.volbounds;
+  g_appState.gridICON = Grid{nullptr,vec3i(256),volbounds};
+  Grid &gridICON = g_appState.gridICON;
+  size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
+  CUDA_SAFE_CALL(cudaMalloc(&gridICON.valueRanges,
+                            sizeof(gridICON.valueRanges[0])*numMC_ICON));
+  CUDA_SAFE_CALL(cudaMalloc(&gridICON.maxOpacities,
+                            sizeof(gridICON.maxOpacities[0])*numMC_ICON));
+  initGrid<<<iDivUp(numMC_ICON,1024),1024>>>(gridICON);
+  size_t numCells = g_appState.deviceCells.size();
+  buildGrid_ICON<<<iDivUp(numCells,1024),1024>>>(gridICON,
+                                                 g_appState.deviceCells.data(),
+                                                 g_appState.deviceCells.size());
+}
+
+static void buildCuBQLGrid(Pipeline &pl) {
+  box3f &volbounds = g_appState.volbounds;
+  g_appState.gridUMesh = Grid{nullptr,vec3i(256),volbounds};
+  Grid &gridUMesh = g_appState.gridUMesh;
+  size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
+  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.valueRanges,
+                            sizeof(gridUMesh.valueRanges[0])*numMC_UMesh));
+  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.maxOpacities,
+                            sizeof(gridUMesh.maxOpacities[0])*numMC_UMesh));
+  initGrid<<<iDivUp(numMC_UMesh,1024),1024>>>(gridUMesh);
+  size_t numWedges = g_appState.cubql.numCells;
+  buildGrid_UMesh<<<iDivUp(numWedges,1024),1024>>>(gridUMesh,
+                                                   g_appState.cubql.d_vertices,
+                                                   g_appState.cubql.d_scalars,
+                                                   g_appState.cubql.d_indices,
+                                                   numWedges);
+
+}
+
 extern "C" int main(int argc, char *argv[]) {
 
   if (argc < 2) {
@@ -373,10 +607,12 @@ extern "C" int main(int argc, char *argv[]) {
     numCells = std::min(numCells,size_t(g_appState.maxNumCells));
   }
 
-  std::vector<ICONCell> cells(numCells);
+  std::vector<ICONCell> &cells = g_appState.cells;
+  cells.resize(numCells);
   in.read((char *)cells.data(),sizeof(ICONCell)*numCells);
 
-  box3f volbounds(
+  box3f &volbounds = g_appState.volbounds;
+  volbounds = box3f(
     {INFINITY,INFINITY,INFINITY},
     {-INFINITY,-INFINITY,-INFINITY}
   );
@@ -417,10 +653,8 @@ extern "C" int main(int argc, char *argv[]) {
     for (int j=0; j<cell.numLayers; ++j) dataRange.extend(cell.value[j]);
   }
 
-  Buffer deviceCells(cells.size(), cells.data());
-  ICONGrid deviceGrid;
-  deviceGrid.cells = deviceCells.data();
-  deviceGrid.numCells = deviceCells.size();
+  g_appState.deviceCells = Buffer(cells.size(), cells.data());
+  auto &deviceCells = g_appState.deviceCells;
 
   Pipeline pl(argc, argv, "icon_rt");
 
@@ -478,218 +712,20 @@ extern "C" int main(int argc, char *argv[]) {
   LaunchParams parms;
 
 #ifdef RTCORE
-  // ######################################################
-  // variant with triangle geometry
-  // ######################################################
 
-  std::vector<vec3f> vertex;
-  std::vector<vec3i> index;
-  for (size_t i=0; i<cells.size(); ++i) {
-    const ICONCell &cell = cells[i];
-    vec3f v1 = toCartesian({cell.height[0],cell.lat.x,cell.lon.x});
-    vec3f v2 = toCartesian({cell.height[0],cell.lat.y,cell.lon.y});
-    vec3f v3 = toCartesian({cell.height[0],cell.lat.z,cell.lon.z});
-    vertex.push_back(v1);
-    vertex.push_back(v2);
-    vertex.push_back(v3);
-    index.push_back({int(i)*3,int(i)*3+1,int(i)*3+2});
-  }
+  buildTriangleAccel(pl);
+  buildUserGeomAccel(pl);
+  buildCuBQLAccel(pl);
 
-  OWLVarDecl trianglesGeomVars[] = {
-    { "index",  OWL_BUFPTR, OWL_OFFSETOF(ICONTriangleGeom,index)},
-    { "vertex", OWL_BUFPTR, OWL_OFFSETOF(ICONTriangleGeom,vertex)},
-    { nullptr /* sentinel to mark end of list */ }
-  };
-  OWLGeomType trianglesGeomType = owlGeomTypeCreate(pl.owlContext(),
-                                                    OWL_TRIANGLES,
-                                                    sizeof(ICONTriangleGeom),
-                                                    trianglesGeomVars,-1);
-  owlGeomTypeSetClosestHit(trianglesGeomType, 0, pl.owlModule(), "ICONTrianglesClosestHit");
-  OWLBuffer vertexBuffer
-    = owlDeviceBufferCreate(pl.owlContext(),OWL_FLOAT3,vertex.size(),vertex.data());
-  OWLBuffer indexBuffer
-    = owlDeviceBufferCreate(pl.owlContext(),OWL_INT3,index.size(),index.data());
-
-  OWLGeom trianglesGeom = owlGeomCreate(pl.owlContext(),trianglesGeomType);
-
-  owlTrianglesSetVertices(trianglesGeom,vertexBuffer,vertex.size(),sizeof(vec3f),0);
-  owlTrianglesSetIndices(trianglesGeom,indexBuffer,index.size(),sizeof(vec3i),0);
-
-  owlGeomSetBuffer(trianglesGeom,"vertex",vertexBuffer);
-  owlGeomSetBuffer(trianglesGeom,"index",indexBuffer);
-
-  OWLGroup trianglesBLAS = owlTrianglesGeomGroupCreate(pl.owlContext(),1,&trianglesGeom);
-  owlGroupBuildAccel(trianglesBLAS);
-
-  g_appState.trianglesTLAS = owlInstanceGroupCreate(pl.owlContext(),1,&trianglesBLAS);
-  owlGroupBuildAccel(g_appState.trianglesTLAS);
-
-
-  // ######################################################
-  // variant with user geometry
-  // ######################################################
-
-  OWLVarDecl iconGeomVars[]
-  = {
-     { "cells",  OWL_BUFPTR, OWL_OFFSETOF(ICONGrid,cells)},
-     { "numCells",  OWL_UINT, OWL_OFFSETOF(ICONGrid,numCells)},
-     { nullptr /* sentinel to mark end of list */ }
-  };
-  OWLGeomType userGeomType = owlGeomTypeCreate(pl.owlContext(),
-                                               OWL_GEOM_USER,
-                                               sizeof(ICONGrid),
-                                               iconGeomVars, -1);
-  owlGeomTypeSetBoundsProg(userGeomType, pl.owlModule(), "ICONCellBounds");
-  owlGeomTypeSetIntersectProg(userGeomType, 0, pl.owlModule(), "ICONCellIntersect");
-  owlGeomTypeSetClosestHit(userGeomType, 0, pl.owlModule(), "ICONCellClosestHit");
-
-  OWLGeom userGeom = owlGeomCreate(pl.owlContext(), userGeomType);
-  owlGeomSetPrimCount(userGeom, cells.size());
-
-  OWLBuffer cellBuffer = owlDeviceBufferCreate(pl.owlContext(),
-                                               OWL_USER_TYPE(ICONCell{}),
-                                               cells.size(),
-                                               cells.data());
-  owlGeomSetBuffer(userGeom, "cells", cellBuffer);
-  owlGeomSet1ui(userGeom, "numCells", (unsigned)cells.size());
-
-  owlBuildPrograms(pl.owlContext());
-
-  OWLGroup userGeomBLAS = owlUserGeomGroupCreate(pl.owlContext(), 1, &userGeom);
-  owlGroupBuildAccel(userGeomBLAS);
-
-  g_appState.userGeomTLAS = owlInstanceGroupCreate(pl.owlContext(), 1);
-  owlInstanceGroupSetChild(g_appState.userGeomTLAS, 0, userGeomBLAS);
-
-  owlGroupBuildAccel(g_appState.userGeomTLAS);
-
-
-  // ######################################################
-  // umesh variant
-  // ######################################################
-  std::vector<vec3f> vertexUMesh;
-  std::vector<int> indexUMesh;
-  std::vector<float> vertexScalars;
-  for (size_t i=0; i<cells.size(); ++i) {
-    const ICONCell &cell = cells[i];
-    for (int h=0; h<cell.numLayers; ++h) {
-      // bottom triangle:
-      vec3f bv1 = toCartesian({cell.height[h],cell.lat.x,cell.lon.x});
-      vec3f bv2 = toCartesian({cell.height[h],cell.lat.y,cell.lon.y});
-      vec3f bv3 = toCartesian({cell.height[h],cell.lat.z,cell.lon.z});
-      //top triangle:
-      vec3f tv1 = toCartesian({cell.height[h+1],cell.lat.x,cell.lon.x});
-      vec3f tv2 = toCartesian({cell.height[h+1],cell.lat.y,cell.lon.y});
-      vec3f tv3 = toCartesian({cell.height[h+1],cell.lat.z,cell.lon.z});
-      // value:
-      float bv = h==0?cell.getValue(cell.height[h]):(cell.getValue(cell.height[h-1])+cell.getValue(cell.height[h]))*0.5f;
-      float tv = h<cell.numLayers-1?(cell.getValue(cell.height[h])+cell.getValue(cell.height[h+1]))*0.5f:cell.getValue(cell.height[h+1]);
-      
-      int idx0 = vertexUMesh.size();
-
-      vertexUMesh.push_back(bv1); vertexScalars.push_back(bv);
-      vertexUMesh.push_back(bv2); vertexScalars.push_back(bv);
-      vertexUMesh.push_back(bv3); vertexScalars.push_back(bv);
-
-#if 1
-      vertexUMesh.push_back(tv1); vertexScalars.push_back(bv);
-      vertexUMesh.push_back(tv2); vertexScalars.push_back(bv);
-      vertexUMesh.push_back(tv3); vertexScalars.push_back(bv);
-#else
-      vertexUMesh.push_back(tv1); vertexScalars.push_back(tv);
-      vertexUMesh.push_back(tv2); vertexScalars.push_back(tv);
-      vertexUMesh.push_back(tv3); vertexScalars.push_back(tv);
-#endif
-
-      indexUMesh.push_back(idx0+0);
-      indexUMesh.push_back(idx0+1);
-      indexUMesh.push_back(idx0+2);
-      indexUMesh.push_back(idx0+3);
-      indexUMesh.push_back(idx0+4);
-      indexUMesh.push_back(idx0+5);
-    }
-  }
-
-  vec3f *d_vertices{nullptr};
-  int *d_indices{nullptr};
-  float *d_scalars{nullptr};
-  size_t numVertices = vertexUMesh.size();
-  size_t numIndices = indexUMesh.size();
-  size_t numWedges = indexUMesh.size()/6;
-
-  CUDA_SAFE_CALL(cudaMalloc(&d_vertices, sizeof(vertexUMesh[0])*numVertices));
-  CUDA_SAFE_CALL(cudaMemcpy(d_vertices,
-                            vertexUMesh.data(),
-                            sizeof(vertexUMesh[0])*numVertices,
-                            cudaMemcpyHostToDevice));
-
-  CUDA_SAFE_CALL(cudaMalloc(&d_indices, sizeof(indexUMesh[0])*numIndices));
-  CUDA_SAFE_CALL(cudaMemcpy(d_indices,
-                            indexUMesh.data(),
-                            sizeof(indexUMesh[0])*numIndices,
-                            cudaMemcpyHostToDevice));
-
-  CUDA_SAFE_CALL(cudaMalloc(&d_scalars, sizeof(vertexScalars[0])*numVertices));
-  CUDA_SAFE_CALL(cudaMemcpy(d_scalars,
-                            vertexScalars.data(),
-                            sizeof(vertexScalars[0])*numVertices,
-                            cudaMemcpyHostToDevice));
-
-  box3f *primBounds;
-  CUDA_SAFE_CALL(cudaMalloc(&primBounds, sizeof(primBounds[0])*numWedges));
-
-  computeBounds<<<iDivUp(numWedges,1024),1024>>>(primBounds,
-                                                 d_vertices,
-                                                 d_indices,
-                                                 numWedges);
-
-  bvh_t bvh;
-
-  cuBQL::DeviceMemoryResource memResource;
-  cuBQL::gpuBuilder(bvh,
-                    (const cuBQL::box_t<float,3>*)primBounds,
-                    numWedges,
-                    cuBQL::BuildConfig(),
-                    0,
-                    memResource);
-
-  CUDA_SAFE_CALL(cudaFree(primBounds));
-
-  float *d_perVertex{nullptr};
-  CUDA_SAFE_CALL(cudaMalloc(&d_perVertex, sizeof(vertexScalars[0])*numVertices));
-  CUDA_SAFE_CALL(cudaMemcpy(d_perVertex,
-                            vertexScalars.data(),
-                            sizeof(vertexScalars[0])*numVertices,
-                            cudaMemcpyHostToDevice));
-
-  // DDA grid(s)
-  g_appState.gridICON = Grid{nullptr,vec3i(256),volbounds};
-  Grid &gridICON = g_appState.gridICON;
-  size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
-  CUDA_SAFE_CALL(cudaMalloc(&gridICON.valueRanges,
-                            sizeof(gridICON.valueRanges[0])*numMC_ICON));
-  CUDA_SAFE_CALL(cudaMalloc(&gridICON.maxOpacities,
-                            sizeof(gridICON.maxOpacities[0])*numMC_ICON));
-  initGrid<<<iDivUp(numMC_ICON,1024),1024>>>(gridICON);
-  buildGrid_ICON<<<iDivUp(numCells,1024),1024>>>(gridICON,
-                                                 deviceCells.data(),
-                                                 deviceCells.size());
-
-  g_appState.gridUMesh = Grid{nullptr,vec3i(256),volbounds};
-  Grid &gridUMesh = g_appState.gridUMesh;
-  size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
-  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.valueRanges,
-                            sizeof(gridUMesh.valueRanges[0])*numMC_UMesh));
-  CUDA_SAFE_CALL(cudaMalloc(&gridUMesh.maxOpacities,
-                            sizeof(gridUMesh.maxOpacities[0])*numMC_UMesh));
-  initGrid<<<iDivUp(numMC_UMesh,1024),1024>>>(gridUMesh);
-  buildGrid_UMesh<<<iDivUp(numWedges,1024),1024>>>(gridUMesh,
-                                                   d_vertices,
-                                                   d_scalars,
-                                                   d_indices,
-                                                   numWedges);
+  buildICONGrid(pl);
+  buildCuBQLGrid(pl);
 
   pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
+    auto &gridICON = g_appState.gridICON;
+    auto &gridUMesh = g_appState.gridUMesh;
+    size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
+    size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
+
     vec4f *d_rgbaLUT{nullptr};
     CUDA_SAFE_CALL(cudaMalloc(&d_rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size));
     CUDA_SAFE_CALL(cudaMemcpy(d_rgbaLUT,tf->rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size,
@@ -712,15 +748,13 @@ extern "C" int main(int argc, char *argv[]) {
 #endif
 
   // volume
-#ifdef RTCORE
   owlParamsSetGroup(pl.owlLaunchParams(), "volume.handle", g_appState.trianglesTLAS);
   pl.launchParam("volume.mode", parms.volume.mode) = TRIANGLE_MODE;
   pl.launchParam("volume.accelMode", parms.volume.accelMode) = SPHERE_ACCEL_MODE;
-  owlParamsSetRaw(pl.owlLaunchParams(), "volume.cubql.handle", &bvh);
-  pl.launchParam("volume.cubql.vertices", (RawPointer &)parms.volume.cubql.vertices) = d_vertices;
-  pl.launchParam("volume.cubql.indices", (RawPointer &)parms.volume.cubql.indices) = d_indices;
-  pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = d_perVertex;
-#endif
+  owlParamsSetRaw(pl.owlLaunchParams(), "volume.cubql.handle", &g_appState.cubql.bvh);
+  pl.launchParam("volume.cubql.vertices", (RawPointer &)parms.volume.cubql.vertices) = g_appState.cubql.d_vertices;
+  pl.launchParam("volume.cubql.indices", (RawPointer &)parms.volume.cubql.indices) = g_appState.cubql.d_indices;
+  pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = g_appState.cubql.d_scalars;
   pl.launchParam("volume.cells", (RawPointer &)parms.volume.cells) = deviceCells.data();
   pl.launchParam("volume.numCells", parms.volume.numCells) = (int)deviceCells.size();
   pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius) = innerRadius;

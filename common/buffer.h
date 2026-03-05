@@ -33,6 +33,8 @@ namespace dvr_course {
 // ========================================================
 template <typename T>
 struct Buffer {
+  Buffer() = default;
+
   Buffer(size_t size, const T *ptr) : size_(size)
   {
 #ifdef RTCORE
