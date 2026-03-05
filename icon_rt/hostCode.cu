@@ -64,6 +64,7 @@ DECL_LAUNCH_PARAMS(icon_rt::LaunchParams)
 
 struct {
   std::string filepath;
+  int maxNumCells{-1}; // only load the first 'maxNumCells' from the data
   Transfunc transfunc;
   float unitDistance;
   int mode{TRIANGLE_MODE};
@@ -93,6 +94,9 @@ static void parseCommandLine(int argc, char *argv[]) {
     std::string arg = argv[i];
     if (arg[0] != '-' && endsWith(arg,".ic"))
       g_appState.filepath = arg;
+    else if (arg == "--num-cells") {
+      g_appState.maxNumCells = std::atoi(argv[++i]);
+    }
     else if (arg == "-mode") {
       g_appState.mode = std::atoi(argv[++i]);
     }
@@ -364,6 +368,10 @@ extern "C" int main(int argc, char *argv[]) {
   in.seekg(0,in.end);
   numCells = in.tellg()/sizeof(ICONCell);
   in.seekg(0,in.beg);
+
+  if (g_appState.maxNumCells>=0) {
+    numCells = std::min(numCells,size_t(g_appState.maxNumCells));
+  }
 
   std::vector<ICONCell> cells(numCells);
   in.read((char *)cells.data(),sizeof(ICONCell)*numCells);
