@@ -65,6 +65,8 @@ DECL_LAUNCH_PARAMS(icon_rt::LaunchParams)
 struct {
   std::string filepath;
   int maxNumCells{-1}; // only load the first 'maxNumCells' from the data
+  box1f latRange{-INFINITY,INFINITY};
+  box1f lonRange{-INFINITY,INFINITY};
   Transfunc transfunc;
   float unitDistance;
   box3f volbounds;
@@ -107,6 +109,16 @@ static void parseCommandLine(int argc, char *argv[]) {
       g_appState.filepath = arg;
     else if (arg == "--num-cells") {
       g_appState.maxNumCells = std::atoi(argv[++i]);
+    }
+    else if (arg == "--lat-range") {
+      std::string s = argv[++i];
+      g_appState.latRange.lower = std::stof(s.substr(0, s.find(':')));
+      g_appState.latRange.upper = std::stof(s.substr(s.find(':')+1, s.length()));
+    }
+    else if (arg == "--lon-range") {
+      std::string s = argv[++i];
+      g_appState.lonRange.lower = std::stof(s.substr(0, s.find(':')));
+      g_appState.lonRange.upper = std::stof(s.substr(s.find(':')+1, s.length()));
     }
     else if (arg == "-mode") {
       g_appState.mode = std::atoi(argv[++i]);
@@ -610,6 +622,30 @@ extern "C" int main(int argc, char *argv[]) {
   std::vector<ICONCell> &cells = g_appState.cells;
   cells.resize(numCells);
   in.read((char *)cells.data(),sizeof(ICONCell)*numCells);
+
+  box1f latRange(deg2rad(g_appState.latRange.lower),
+                 deg2rad(g_appState.latRange.upper));
+  box1f lonRange(deg2rad(g_appState.lonRange.lower),
+                 deg2rad(g_appState.lonRange.upper));
+
+  cells.erase(std::remove_if(
+    cells.begin(), cells.end(),
+      [=](const ICONCell &cell) {
+        return
+          (cell.lat.x < latRange.lower &&
+           cell.lat.y < latRange.lower &&
+           cell.lat.z < latRange.lower) ||
+          (cell.lat.x > latRange.upper &&
+           cell.lat.y > latRange.upper &&
+           cell.lat.z > latRange.upper) ||
+          (cell.lon.x < lonRange.lower &&
+           cell.lon.y < lonRange.lower &&
+           cell.lon.z < lonRange.lower) ||
+          (cell.lon.x > lonRange.upper &&
+           cell.lon.y > lonRange.upper &&
+           cell.lon.z > lonRange.upper);
+      }), cells.end());
+  numCells = cells.size();
 
   box3f &volbounds = g_appState.volbounds;
   volbounds = box3f(
