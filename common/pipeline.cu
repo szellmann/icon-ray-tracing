@@ -174,6 +174,9 @@ void clearFramebuffer(const Frame *fb,
                       float depth = 0.f)
 {
   int width = fb->width; int height = fb->height;
+  auto *fbPointer = fb->fbPointer;
+  auto *fbDepth = fb->fbDepth;
+  auto *accumBuffer = fb->accumBuffer;
 #ifdef RTCORE
   cuda::for_each(/*TODO: stream*/0, 0, width, 0, height,
 #else
@@ -181,17 +184,17 @@ void clearFramebuffer(const Frame *fb,
 #endif
     [=] __device__ (int x, int y) {
       int pixelID = x+y*width;
-      // if (fb->fbPointer) {
-      //   fb->fbPointer[pixelID] = make_rgba(rgba);
-      // }
+      if (fbPointer) {
+        fbPointer[pixelID] = make_rgba(rgba);
+      }
 
-      // if (fb->fbDepth) {
-      //   fb->fbDepth[pixelID] = depth;
-      // }
+      if (fbDepth) {
+        fbDepth[pixelID] = depth;
+      }
 
-      // if (fb->accumBuffer) {
-      //   fb->accumBuffer[pixelID] = vec4f(0.f);
-      // }
+      if (accumBuffer) {
+        accumBuffer[pixelID] = vec4f(0.f);
+      }
     });
 }
 
