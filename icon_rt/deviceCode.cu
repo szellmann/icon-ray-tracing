@@ -271,7 +271,7 @@ bool traverseAccel(const Ray &ray, float &tnear, float &tfar, float &majorant) {
     tnear = t3;
     tfar  = t4;
   }
-  majorant = 1.f;
+  majorant = lp.volume.accel.maxOpacities[0];
   return true;
 }
 

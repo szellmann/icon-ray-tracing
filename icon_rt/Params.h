@@ -40,6 +40,11 @@ namespace icon_rt {
 
 using bvh_t  = cuBQL::BinaryBVH<float,3>;
 
+struct ShellAccel {
+  float innerRadius, outerRadius;
+  float *maxOpacities;
+};
+
 struct Grid {
   box1f *valueRanges;
   vec3i dims;
@@ -67,9 +72,7 @@ struct Volume {
   // forming a shell around the icon elements;
   // everything inside the inner and outside
   // the outer sphere is considered empty
-  struct {
-    float innerRadius, outerRadius;
-  } accel;
+  ShellAccel accel;
   // grid accel for testing against:
   Grid gridAccel;
   int accelMode;

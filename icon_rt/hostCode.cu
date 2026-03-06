@@ -73,6 +73,7 @@ struct {
   int mode{TRIANGLE_MODE};
   int accelMode{SPHERE_ACCEL_MODE};
   bool accelActive;
+  icon_rt::ShellAccel shellAccel{INFINITY,-INFINITY,nullptr};
   icon_rt::Grid gridICON{nullptr,vec3i(0),volbounds};
   icon_rt::Grid gridUMesh{nullptr,vec3i(0),volbounds};
   OWLGroup trianglesTLAS{0}, userGeomTLAS{0};
@@ -188,6 +189,13 @@ static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
         pl.launchParam("volume.gridAccel.maxOpacities", (RawPointer &)parms.volume.gridAccel.maxOpacities)
             = g_appState.gridICON.maxOpacities;
       }
+    } if (g_appState.accelMode==SPHERE_ACCEL_MODE) {
+      pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius)
+          = g_appState.shellAccel.innerRadius;
+      pl.launchParam("volume.accel.outerRadius", parms.volume.accel.outerRadius)
+          = g_appState.shellAccel.outerRadius;
+      pl.launchParam("volume.accel.maxOpacities", (RawPointer &)parms.volume.accel.maxOpacities)
+          = g_appState.shellAccel.maxOpacities;
     }
     pl.launchParam("volume.accelMode", parms.volume.accelMode) = g_appState.accelMode;
     pl.resetAccumulation();
@@ -300,6 +308,46 @@ __global__ void buildGrid_UMesh(Grid grid,
     valueRange.extend(S);
   }
   rasterizeBox(grid,cellBounds,valueRange);
+}
+
+__global__ void computeMaxOpacities(ShellAccel shellAccel,
+                                    const vec4f *rgbaLUT,
+                                    int size,
+                                    box1f tf_valueRange,
+                                    box1f tf_relRange,
+                                    float tf_opacity)
+{
+  size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+  size_t numMCs = 1;//grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+
+  if (mcID >= numMCs)
+    return;
+
+#if 0
+  box1f valueRange = grid.valueRanges[mcID];
+
+  if (valueRange.upper < valueRange.lower) {
+    grid.maxOpacities[mcID] = 0.f;
+    return;
+  }
+
+  valueRange.lower -= tf_valueRange.lower;
+  valueRange.lower /= tf_valueRange.upper - tf_valueRange.lower;
+  valueRange.upper -= tf_valueRange.lower;
+  valueRange.upper /= tf_valueRange.upper - tf_valueRange.lower;
+
+  int lo = clamp(
+      int(valueRange.lower * (size - 1)), 0, size - 1);
+  int hi = clamp(
+      int(valueRange.upper * (size - 1)) + 1, 0, size - 1);
+#endif
+  int lo=0, hi=size-1;
+
+  float maxOpacity = 0.f;
+  for (int i = lo; i <= hi; ++i) {
+    maxOpacity = fmaxf(maxOpacity, rgbaLUT[i].w);
+  }
+  shellAccel.maxOpacities[mcID] = maxOpacity;
 }
 
 __global__ void computeMaxOpacities(Grid grid,
@@ -555,6 +603,13 @@ static void buildCuBQLAccel(Pipeline &pl) {
   g_appState.cubql.ready = true;
 }
 
+static void buildShellAccel(Pipeline &pl) {
+  ShellAccel &shellAccel = g_appState.shellAccel;
+  size_t numMC_Shell=1;
+  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.maxOpacities,
+                            sizeof(shellAccel.maxOpacities[0])*numMC_Shell));
+}
+
 static void buildICONGrid(Pipeline &pl) {
   box3f &volbounds = g_appState.volbounds;
   g_appState.gridICON = Grid{nullptr,vec3i(256),volbounds};
@@ -679,12 +734,12 @@ extern "C" int main(int argc, char *argv[]) {
   cells.push_back(cell);
 #endif
 
-  float innerRadius{INFINITY};
-  float outerRadius{-INFINITY};
+  g_appState.shellAccel.innerRadius=INFINITY;
+  g_appState.shellAccel.outerRadius=-INFINITY;
   for (int i=0; i<cells.size(); ++i) {
     ICONCell &cell = cells[i];
-    innerRadius = fminf(innerRadius,cell.height[0]);
-    outerRadius = fmaxf(outerRadius,cell.height[cell.numLayers]);
+    g_appState.shellAccel.innerRadius = fminf(g_appState.shellAccel.innerRadius,cell.height[0]);
+    g_appState.shellAccel.outerRadius = fmaxf(g_appState.shellAccel.outerRadius,cell.height[cell.numLayers]);
     volbounds.extend(cell.getBounds());
     for (int j=0; j<cell.numLayers; ++j) dataRange.extend(cell.value[j]);
   }
@@ -717,7 +772,7 @@ extern "C" int main(int argc, char *argv[]) {
     pl.setTransfunc(&tf);
   }
 
-  float magnitude = floorf(log10f(innerRadius));
+  float magnitude = floorf(log10f(g_appState.shellAccel.innerRadius));
   float scale = powf(10.f,magnitude-3);
   g_appState.unitDistance = 1.0f*scale;
   pl.uiParam("Unit distance", &g_appState.unitDistance, 0.01f*scale, 5.f*scale);
@@ -753,12 +808,15 @@ extern "C" int main(int argc, char *argv[]) {
   buildUserGeomAccel(pl);
   buildCuBQLAccel(pl);
 
+  buildShellAccel(pl);
   buildICONGrid(pl);
   buildCuBQLGrid(pl);
 
   pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
+    auto &shellAccel = g_appState.shellAccel;
     auto &gridICON = g_appState.gridICON;
     auto &gridUMesh = g_appState.gridUMesh;
+    size_t numMC_Shell = 1; // (for now)
     size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
     size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
 
@@ -766,6 +824,12 @@ extern "C" int main(int argc, char *argv[]) {
     CUDA_SAFE_CALL(cudaMalloc(&d_rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size));
     CUDA_SAFE_CALL(cudaMemcpy(d_rgbaLUT,tf->rgbaLUT,sizeof(d_rgbaLUT[0])*tf->size,
                               cudaMemcpyHostToDevice));
+    computeMaxOpacities<<<iDivUp(numMC_Shell,1024),1024>>>(shellAccel,
+                                                           d_rgbaLUT,
+                                                           tf->size,
+                                                           tf->valueRange,
+                                                           tf->relRange,
+                                                           tf->opacity);
     computeMaxOpacities<<<iDivUp(numMC_ICON,1024),1024>>>(gridICON,
                                                           d_rgbaLUT,
                                                           tf->size,
@@ -793,8 +857,9 @@ extern "C" int main(int argc, char *argv[]) {
   pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = g_appState.cubql.d_scalars;
   pl.launchParam("volume.cells", (RawPointer &)parms.volume.cells) = deviceCells.data();
   pl.launchParam("volume.numCells", parms.volume.numCells) = (int)deviceCells.size();
-  pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius) = innerRadius;
-  pl.launchParam("volume.accel.outerRadius", parms.volume.accel.outerRadius) = outerRadius;
+  pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius) = g_appState.shellAccel.innerRadius;
+  pl.launchParam("volume.accel.outerRadius", parms.volume.accel.outerRadius) = g_appState.shellAccel.outerRadius;
+  pl.launchParam("volume.accel.maxOpacities", (RawPointer &)parms.volume.accel.maxOpacities) = g_appState.shellAccel.maxOpacities;
   pl.launchParam("volume.bounds", parms.volume.bounds) = volbounds;
   // lighting
   pl.launchParam("ambientColor", parms.ambientColor) = vec3f(1.f);
