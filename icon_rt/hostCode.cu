@@ -898,11 +898,11 @@ extern "C" int main(int argc, char *argv[]) {
 
   buildTriangleAccel(pl);
   buildUserGeomAccel(pl);
-  //buildCuBQLAccel(pl);
+  buildCuBQLAccel(pl);
 
   buildShellAccel(pl);
   buildICONGrid(pl);
-  //buildCuBQLGrid(pl);
+  buildCuBQLGrid(pl);
 
   pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
     auto &shellAccel = g_appState.shellAccel;
