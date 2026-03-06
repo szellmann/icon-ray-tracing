@@ -252,8 +252,9 @@ bool traverseAccel(const Ray &ray, float &tnear, float &tfar, float &majorant) {
   auto &lp = optixLaunchParams;
 
   float t1,t2,t3,t4;
-  bool s1 = intersectSphere(ray,lp.volume.accel.outerRadius,t1,t4);
-  bool s2 = intersectSphere(ray,lp.volume.accel.innerRadius,t2,t3);
+  bool s1 = intersectSphere(ray,lp.volume.accel.radialBounds->upper,t1,t4);
+  bool s2 = intersectSphere(ray,lp.volume.accel.radialBounds->lower,t2,t3);
+
   if (!s1 && !s2) return false;
   if (t4 < ray.tmin) return false;
   // outer sphere hit, but inner was missed:
@@ -271,6 +272,22 @@ bool traverseAccel(const Ray &ray, float &tnear, float &tfar, float &majorant) {
     tnear = t3;
     tfar  = t4;
   }
+
+  vec3f P1 = toSpherical(ray.org+ray.dir*t1);
+  vec3f P2 = toSpherical(ray.org+ray.dir*t2);
+  vec3f P3 = toSpherical(ray.org+ray.dir*t3);
+  vec3f P4 = toSpherical(ray.org+ray.dir*t4);
+
+  box1f latBounds = *lp.volume.accel.latBounds;
+  if (!(latBounds.contains(P1.y)||latBounds.contains(P2.y)||
+        latBounds.contains(P3.y)||latBounds.contains(P4.y)))
+    return false;
+
+  box1f lonBounds = *lp.volume.accel.lonBounds;
+  if (!(lonBounds.contains(P1.z)||lonBounds.contains(P2.z)||
+        lonBounds.contains(P3.z)||lonBounds.contains(P4.z)))
+    return false;
+
   majorant = lp.volume.accel.maxOpacities[0];
   return true;
 }
@@ -358,7 +375,7 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
       }
       // makeshift epsilon to avoid intersecting the same
       // spherical shell again (there are better ways to do this..)
-      const float sceneEPS = lp.volume.accel.innerRadius*1e-3f;
+      const float sceneEPS = lp.volume.accel.radialBounds->lower*1e-3f;
       ray.tmin = tfar+sceneEPS;
     }
   } else {

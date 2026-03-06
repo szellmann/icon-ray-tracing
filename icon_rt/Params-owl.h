@@ -36,9 +36,7 @@ OWLVarDecl launchParams_owl[]
    { "volume.numCells", OWL_INT, OWL_OFFSETOF(LaunchParams,volume.numCells) },
    { "volume.bounds", OWL_USER_TYPE(box3f), OWL_OFFSETOF(LaunchParams,volume.bounds) },
    // volume accel
-   { "volume.accel.innerRadius", OWL_FLOAT, OWL_OFFSETOF(LaunchParams,volume.accel.innerRadius) },
-   { "volume.accel.outerRadius", OWL_FLOAT, OWL_OFFSETOF(LaunchParams,volume.accel.outerRadius) },
-   { "volume.accel.maxOpacities", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.accel.maxOpacities) },
+   { "volume.accel", OWL_USER_TYPE(ShellAccel), OWL_OFFSETOF(LaunchParams,volume.accel) },
    { "volume.gridAccel.valueRanges", OWL_RAW_POINTER, OWL_OFFSETOF(LaunchParams,volume.gridAccel.valueRanges) },
    { "volume.gridAccel.dims", OWL_INT3, OWL_OFFSETOF(LaunchParams,volume.gridAccel.dims) },
    { "volume.gridAccel.worldBounds", OWL_USER_TYPE(box3f), OWL_OFFSETOF(LaunchParams,volume.gridAccel.worldBounds) },

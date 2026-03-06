@@ -41,7 +41,7 @@ namespace icon_rt {
 using bvh_t  = cuBQL::BinaryBVH<float,3>;
 
 struct ShellAccel {
-  float innerRadius, outerRadius;
+  box1f *radialBounds, *latBounds, *lonBounds;
   float *maxOpacities;
 };
 

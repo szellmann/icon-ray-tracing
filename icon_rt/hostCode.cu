@@ -73,9 +73,9 @@ struct {
   int mode{TRIANGLE_MODE};
   int accelMode{SPHERE_ACCEL_MODE};
   bool accelActive;
-  icon_rt::ShellAccel shellAccel{INFINITY,-INFINITY,nullptr};
-  icon_rt::Grid gridICON{nullptr,vec3i(0),volbounds};
-  icon_rt::Grid gridUMesh{nullptr,vec3i(0),volbounds};
+  icon_rt::ShellAccel shellAccel;
+  icon_rt::Grid gridICON;
+  icon_rt::Grid gridUMesh;
   OWLGroup trianglesTLAS{0}, userGeomTLAS{0};
   std::vector<icon_rt::ICONCell> cells;
   Buffer<icon_rt::ICONCell> deviceCells;
@@ -190,12 +190,6 @@ static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
             = g_appState.gridICON.maxOpacities;
       }
     } if (g_appState.accelMode==SPHERE_ACCEL_MODE) {
-      pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius)
-          = g_appState.shellAccel.innerRadius;
-      pl.launchParam("volume.accel.outerRadius", parms.volume.accel.outerRadius)
-          = g_appState.shellAccel.outerRadius;
-      pl.launchParam("volume.accel.maxOpacities", (RawPointer &)parms.volume.accel.maxOpacities)
-          = g_appState.shellAccel.maxOpacities;
     }
     pl.launchParam("volume.accelMode", parms.volume.accelMode) = g_appState.accelMode;
     pl.resetAccumulation();
@@ -212,6 +206,17 @@ __global__ void initGrid(Grid grid)
     return;
 
   grid.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
+}
+
+__global__ void initGrid(ShellAccel accel)
+{
+  // size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+  // size_t numMCs = grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+
+  // if (mcID >= numMCs)
+  //   return;
+
+  // grid.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
 }
 
 inline __device__ void rasterizeBox(Grid grid, const box3f &box, const box1f &range)
@@ -284,6 +289,77 @@ __global__ void buildGrid_ICON(Grid grid,
 
     rasterizeBox(grid,bounds,valueRange);
   }
+}
+
+__global__ void buildShell_ICON(ShellAccel shell,
+                                const ICONCell *cells,
+                                size_t numCells)
+{
+  size_t cellID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+
+  if (cellID >= numCells)
+    return;
+
+  const ICONCell &cell = cells[cellID];
+
+  // for (int i=0; i<cell.numLayers; ++i) {
+  //   // rasterize box per layer
+  //   box3f bounds(
+  //     {INFINITY,INFINITY,INFINITY},
+  //     {-INFINITY,-INFINITY,-INFINITY}
+  //   );
+
+  //   // bottom triangle vertices
+  //   vec3f bv1 = toCartesian({cell.height[i],cell.lat.x,cell.lon.x});
+  //   vec3f bv2 = toCartesian({cell.height[i],cell.lat.y,cell.lon.y});
+  //   vec3f bv3 = toCartesian({cell.height[i],cell.lat.z,cell.lon.z});
+
+  //   bounds.extend(bv1);
+  //   bounds.extend(bv2);
+  //   bounds.extend(bv3);
+
+  //   // top triangle vertices
+  //   vec3f tv1 = toCartesian({cell.height[i+1],cell.lat.x,cell.lon.x});
+  //   vec3f tv2 = toCartesian({cell.height[i+1],cell.lat.y,cell.lon.y});
+  //   vec3f tv3 = toCartesian({cell.height[i+1],cell.lat.z,cell.lon.z});
+
+  //   vec3f bary = (tv1+tv2+tv3)/3.f;
+
+  //   float R = cell.height[i+1];
+  //   float D = R-length(bary);
+  //   float off = D/R;
+
+  //   tv1 += tv1*off;
+  //   tv2 += tv2*off;
+  //   tv3 += tv3*off;
+
+  //   bounds.extend(tv1);
+  //   bounds.extend(tv2);
+  //   bounds.extend(tv3);
+
+  //   box1f valueRange(INFINITY,-INFINITY);
+  //   valueRange.extend(cell.getValue(cell.height[i]));
+  //   valueRange.extend(cell.getValue(cell.height[i+1]));
+
+  //   rasterizeBox(grid,bounds,valueRange);
+  // }
+
+  atomicMin(&shell.radialBounds->lower,cell.height[0]);
+  atomicMax(&shell.radialBounds->upper,cell.height[cell.numLayers]);
+
+  atomicMin(&shell.latBounds->lower,cell.lat.x);
+  atomicMin(&shell.latBounds->lower,cell.lat.y);
+  atomicMin(&shell.latBounds->lower,cell.lat.z);
+  atomicMax(&shell.latBounds->upper,cell.lat.x);
+  atomicMax(&shell.latBounds->upper,cell.lat.y);
+  atomicMax(&shell.latBounds->upper,cell.lat.z);
+
+  atomicMin(&shell.lonBounds->lower,cell.lon.x);
+  atomicMin(&shell.lonBounds->lower,cell.lon.y);
+  atomicMin(&shell.lonBounds->lower,cell.lon.z);
+  atomicMax(&shell.lonBounds->upper,cell.lon.x);
+  atomicMax(&shell.lonBounds->upper,cell.lon.y);
+  atomicMax(&shell.lonBounds->upper,cell.lon.z);
 }
 
 __global__ void buildGrid_UMesh(Grid grid,
@@ -604,10 +680,26 @@ static void buildCuBQLAccel(Pipeline &pl) {
 }
 
 static void buildShellAccel(Pipeline &pl) {
+  g_appState.shellAccel = ShellAccel{nullptr,nullptr,nullptr,nullptr};
   ShellAccel &shellAccel = g_appState.shellAccel;
+  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.radialBounds,
+                            sizeof(*shellAccel.radialBounds)));
+  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.latBounds,
+                            sizeof(*shellAccel.latBounds)));
+  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.lonBounds,
+                            sizeof(*shellAccel.lonBounds)));
+  box1f emptyBox{INFINITY,-INFINITY};
+  CUDA_SAFE_CALL(cudaMemcpy(shellAccel.radialBounds,&emptyBox,sizeof(emptyBox),
+                            cudaMemcpyHostToDevice));
+
   size_t numMC_Shell=1;
   CUDA_SAFE_CALL(cudaMalloc(&shellAccel.maxOpacities,
                             sizeof(shellAccel.maxOpacities[0])*numMC_Shell));
+  initGrid<<<iDivUp(numMC_Shell,1024),1024>>>(shellAccel);
+  size_t numCells = g_appState.deviceCells.size();
+  buildShell_ICON<<<iDivUp(numCells,1024),1024>>>(shellAccel,
+                                                  g_appState.deviceCells.data(),
+                                                  g_appState.deviceCells.size());
 }
 
 static void buildICONGrid(Pipeline &pl) {
@@ -734,12 +826,12 @@ extern "C" int main(int argc, char *argv[]) {
   cells.push_back(cell);
 #endif
 
-  g_appState.shellAccel.innerRadius=INFINITY;
-  g_appState.shellAccel.outerRadius=-INFINITY;
+  float innerRadius=INFINITY;
+  float outerRadius=-INFINITY;
   for (int i=0; i<cells.size(); ++i) {
     ICONCell &cell = cells[i];
-    g_appState.shellAccel.innerRadius = fminf(g_appState.shellAccel.innerRadius,cell.height[0]);
-    g_appState.shellAccel.outerRadius = fmaxf(g_appState.shellAccel.outerRadius,cell.height[cell.numLayers]);
+    innerRadius = fminf(innerRadius,cell.height[0]);
+    outerRadius = fmaxf(outerRadius,cell.height[cell.numLayers]);
     volbounds.extend(cell.getBounds());
     for (int j=0; j<cell.numLayers; ++j) dataRange.extend(cell.value[j]);
   }
@@ -772,7 +864,7 @@ extern "C" int main(int argc, char *argv[]) {
     pl.setTransfunc(&tf);
   }
 
-  float magnitude = floorf(log10f(g_appState.shellAccel.innerRadius));
+  float magnitude = floorf(log10f(innerRadius));
   float scale = powf(10.f,magnitude-3);
   g_appState.unitDistance = 1.0f*scale;
   pl.uiParam("Unit distance", &g_appState.unitDistance, 0.01f*scale, 5.f*scale);
@@ -806,11 +898,11 @@ extern "C" int main(int argc, char *argv[]) {
 
   buildTriangleAccel(pl);
   buildUserGeomAccel(pl);
-  buildCuBQLAccel(pl);
+  //buildCuBQLAccel(pl);
 
   buildShellAccel(pl);
   buildICONGrid(pl);
-  buildCuBQLGrid(pl);
+  //buildCuBQLGrid(pl);
 
   pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
     auto &shellAccel = g_appState.shellAccel;
@@ -857,9 +949,7 @@ extern "C" int main(int argc, char *argv[]) {
   pl.launchParam("volume.cubql.perVertex", (RawPointer &)parms.volume.cubql.perVertex) = g_appState.cubql.d_scalars;
   pl.launchParam("volume.cells", (RawPointer &)parms.volume.cells) = deviceCells.data();
   pl.launchParam("volume.numCells", parms.volume.numCells) = (int)deviceCells.size();
-  pl.launchParam("volume.accel.innerRadius", parms.volume.accel.innerRadius) = g_appState.shellAccel.innerRadius;
-  pl.launchParam("volume.accel.outerRadius", parms.volume.accel.outerRadius) = g_appState.shellAccel.outerRadius;
-  pl.launchParam("volume.accel.maxOpacities", (RawPointer &)parms.volume.accel.maxOpacities) = g_appState.shellAccel.maxOpacities;
+  owlParamsSetRaw(pl.owlLaunchParams(), "volume.accel", &g_appState.shellAccel);
   pl.launchParam("volume.bounds", parms.volume.bounds) = volbounds;
   // lighting
   pl.launchParam("ambientColor", parms.ambientColor) = vec3f(1.f);

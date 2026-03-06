@@ -974,6 +974,11 @@ struct box1f
   }
 
   inline __host__ __device__
+  bool contains(float p) const {
+    return lower<=p && p<=upper;
+  }
+
+  inline __host__ __device__
   void extend(float v) {
     lower = fminf(lower,v);
     upper = fmaxf(upper,v);
