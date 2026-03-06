@@ -217,8 +217,8 @@ inline __device__ void rasterizeBox(Grid grid, const box3f &box, const box1f &ra
         const vec3i mcID(mcx,mcy,mcz);
         const size_t linearID = linearIndex(mcID,grid.dims);
         box1f &vrange = grid.valueRanges[linearID];
-        vrange.lower = atomicMin(&vrange.lower,range.lower);
-        vrange.upper = atomicMax(&vrange.upper,range.upper);
+        atomicMin(&vrange.lower,range.lower);
+        atomicMax(&vrange.upper,range.upper);
       }
     }
   }
