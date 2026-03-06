@@ -632,17 +632,17 @@ extern "C" int main(int argc, char *argv[]) {
     cells.begin(), cells.end(),
       [=](const ICONCell &cell) {
         return
-          (cell.lat.x < latRange.lower &&
-           cell.lat.y < latRange.lower &&
+          (cell.lat.x < latRange.lower ||
+           cell.lat.y < latRange.lower ||
            cell.lat.z < latRange.lower) ||
-          (cell.lat.x > latRange.upper &&
-           cell.lat.y > latRange.upper &&
+          (cell.lat.x > latRange.upper ||
+           cell.lat.y > latRange.upper ||
            cell.lat.z > latRange.upper) ||
-          (cell.lon.x < lonRange.lower &&
-           cell.lon.y < lonRange.lower &&
+          (cell.lon.x < lonRange.lower ||
+           cell.lon.y < lonRange.lower ||
            cell.lon.z < lonRange.lower) ||
-          (cell.lon.x > lonRange.upper &&
-           cell.lon.y > lonRange.upper &&
+          (cell.lon.x > lonRange.upper ||
+           cell.lon.y > lonRange.upper ||
            cell.lon.z > lonRange.upper);
       }), cells.end());
   numCells = cells.size();
