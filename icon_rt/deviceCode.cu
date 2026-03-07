@@ -302,7 +302,6 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
   float *maxOpacities{nullptr};
 
   auto woodcockFunc = [&](const int leafID, float t0, float t1) {
-#if 1
     vec3f albedo = 0.f;
     float extinction = 0.f;
     const float majorant = maxOpacities[leafID];
@@ -313,23 +312,19 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
     //   printf("%f:%f %f %f\n",t0,t1,majorant,t);
     // }
     if (t > t0 && t < t1) {
+#if 0
+      albedo = randomColor((unsigned)leafID);
+#endif
       color = albedo * lp.ambientColor * lp.ambientRadiance;
       alpha = extinction > 0.f ? 1.f : 0.f;
       return false;
     }
     return true; // traverse on
-#else
-    vec3f albedo = randomColor((unsigned)leafID);
-    float extinction = 1.f;
-    color = albedo * lp.ambientColor * lp.ambientRadiance;
-    alpha = extinction > 0.f ? 1.f : 0.f;
-    return false; // colorize first hit
-#endif
   };
 
   if (lp.volume.accelMode == SPHERE_ACCEL_MODE) {
     maxOpacities = lp.volume.accel.maxOpacities;
-    traverseShellAccel(ray,lp.volume.accel,woodcockFunc);
+    sdda(ray,lp.volume.accel,woodcockFunc,debug());
   } else {
     maxOpacities = lp.volume.gridAccel.maxOpacities;
     dda3(ray,lp.volume.gridAccel.dims,lp.volume.gridAccel.worldBounds,woodcockFunc);

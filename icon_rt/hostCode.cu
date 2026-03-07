@@ -208,15 +208,15 @@ __global__ void initGrid(Grid grid)
   grid.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
 }
 
-__global__ void initGrid(ShellAccel accel)
+__global__ void initGrid(ShellAccel shell)
 {
-  // size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
-  // size_t numMCs = grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+   size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
+   size_t numMCs = shell.dims.x * size_t(shell.dims.y) * shell.dims.z;
 
-  // if (mcID >= numMCs)
-  //   return;
+   if (mcID >= numMCs)
+     return;
 
-  // grid.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
+   shell.valueRanges[mcID] = box1f(FLT_MAX,-FLT_MAX);
 }
 
 inline __device__ void rasterizeBox(Grid grid, const box3f &box, const box1f &range)
@@ -302,47 +302,32 @@ __global__ void buildShell_ICON(ShellAccel shell,
 
   const ICONCell &cell = cells[cellID];
 
-  // for (int i=0; i<cell.numLayers; ++i) {
-  //   // rasterize box per layer
-  //   box3f bounds(
-  //     {INFINITY,INFINITY,INFINITY},
-  //     {-INFINITY,-INFINITY,-INFINITY}
-  //   );
+  for (int i=0; i<cell.numLayers; ++i) {
+    vec3i c1 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.x,cell.lon.x),shell.dims);
+    vec3i c2 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.y,cell.lon.y),shell.dims);
+    vec3i c3 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.z,cell.lon.z),shell.dims);
 
-  //   // bottom triangle vertices
-  //   vec3f bv1 = toCartesian({cell.height[i],cell.lat.x,cell.lon.x});
-  //   vec3f bv2 = toCartesian({cell.height[i],cell.lat.y,cell.lon.y});
-  //   vec3f bv3 = toCartesian({cell.height[i],cell.lat.z,cell.lon.z});
+    vec3i c4 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.x,cell.lon.x),shell.dims);
+    vec3i c5 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.y,cell.lon.y),shell.dims);
+    vec3i c6 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.z,cell.lon.z),shell.dims);
 
-  //   bounds.extend(bv1);
-  //   bounds.extend(bv2);
-  //   bounds.extend(bv3);
+    vec3i loMC = min(c1,min(c2,c3));
+    vec3i upMC = max(c4,max(c5,c6));
 
-  //   // top triangle vertices
-  //   vec3f tv1 = toCartesian({cell.height[i+1],cell.lat.x,cell.lon.x});
-  //   vec3f tv2 = toCartesian({cell.height[i+1],cell.lat.y,cell.lon.y});
-  //   vec3f tv3 = toCartesian({cell.height[i+1],cell.lat.z,cell.lon.z});
+    box1f range(cell.getValue(cell.height[i]),cell.getValue(cell.height[i+1]));
 
-  //   vec3f bary = (tv1+tv2+tv3)/3.f;
-
-  //   float R = cell.height[i+1];
-  //   float D = R-length(bary);
-  //   float off = D/R;
-
-  //   tv1 += tv1*off;
-  //   tv2 += tv2*off;
-  //   tv3 += tv3*off;
-
-  //   bounds.extend(tv1);
-  //   bounds.extend(tv2);
-  //   bounds.extend(tv3);
-
-  //   box1f valueRange(INFINITY,-INFINITY);
-  //   valueRange.extend(cell.getValue(cell.height[i]));
-  //   valueRange.extend(cell.getValue(cell.height[i+1]));
-
-  //   rasterizeBox(grid,bounds,valueRange);
-  // }
+    for (int mcz=loMC.z; mcz<=upMC.z; ++mcz) {
+      for (int mcy=loMC.y; mcy<=upMC.y; ++mcy) {
+        for (int mcx=loMC.x; mcx<=upMC.x; ++mcx) {
+          const vec3i mcID(mcx,mcy,mcz);
+          const size_t linearID = linearIndex(mcID,shell.dims);
+          box1f &vrange = shell.valueRanges[linearID];
+          atomicMin(&vrange.lower,range.lower);
+          atomicMax(&vrange.upper,range.upper);
+        }
+      }
+    }
+  }
 
   atomicMin(&shell.radialBounds->lower,cell.height[0]);
   atomicMax(&shell.radialBounds->upper,cell.height[cell.numLayers]);
@@ -386,7 +371,7 @@ __global__ void buildGrid_UMesh(Grid grid,
   rasterizeBox(grid,cellBounds,valueRange);
 }
 
-__global__ void computeMaxOpacities(ShellAccel shellAccel,
+__global__ void computeMaxOpacities(ShellAccel shell,
                                     const vec4f *rgbaLUT,
                                     int size,
                                     box1f tf_valueRange,
@@ -394,16 +379,15 @@ __global__ void computeMaxOpacities(ShellAccel shellAccel,
                                     float tf_opacity)
 {
   size_t mcID = blockIdx.x * size_t(blockDim.x) + threadIdx.x;
-  size_t numMCs = 1;//grid.dims.x * size_t(grid.dims.y) * grid.dims.z;
+  size_t numMCs = shell.dims.x * size_t(shell.dims.y) * shell.dims.z;
 
   if (mcID >= numMCs)
     return;
 
-#if 0
-  box1f valueRange = grid.valueRanges[mcID];
+  box1f valueRange = shell.valueRanges[mcID];
 
   if (valueRange.upper < valueRange.lower) {
-    grid.maxOpacities[mcID] = 0.f;
+    shell.maxOpacities[mcID] = 0.f;
     return;
   }
 
@@ -416,14 +400,12 @@ __global__ void computeMaxOpacities(ShellAccel shellAccel,
       int(valueRange.lower * (size - 1)), 0, size - 1);
   int hi = clamp(
       int(valueRange.upper * (size - 1)) + 1, 0, size - 1);
-#endif
-  int lo=0, hi=size-1;
 
   float maxOpacity = 0.f;
   for (int i = lo; i <= hi; ++i) {
     maxOpacity = fmaxf(maxOpacity, rgbaLUT[i].w);
   }
-  shellAccel.maxOpacities[mcID] = maxOpacity;
+  shell.maxOpacities[mcID] = maxOpacity;
 }
 
 __global__ void computeMaxOpacities(Grid grid,
@@ -680,7 +662,7 @@ static void buildCuBQLAccel(Pipeline &pl) {
 }
 
 static void buildShellAccel(Pipeline &pl) {
-  g_appState.shellAccel = ShellAccel{nullptr,nullptr,nullptr,nullptr};
+  g_appState.shellAccel = ShellAccel{vec3i(1,1024,1024),nullptr,nullptr,nullptr,nullptr};
   ShellAccel &shellAccel = g_appState.shellAccel;
   CUDA_SAFE_CALL(cudaMalloc(&shellAccel.radialBounds,
                             sizeof(*shellAccel.radialBounds)));
@@ -692,7 +674,9 @@ static void buildShellAccel(Pipeline &pl) {
   CUDA_SAFE_CALL(cudaMemcpy(shellAccel.radialBounds,&emptyBox,sizeof(emptyBox),
                             cudaMemcpyHostToDevice));
 
-  size_t numMC_Shell=1;
+  size_t numMC_Shell = shellAccel.dims.x*size_t(shellAccel.dims.y)*shellAccel.dims.z;
+  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.valueRanges,
+                            sizeof(shellAccel.valueRanges[0])*numMC_Shell));
   CUDA_SAFE_CALL(cudaMalloc(&shellAccel.maxOpacities,
                             sizeof(shellAccel.maxOpacities[0])*numMC_Shell));
   initGrid<<<iDivUp(numMC_Shell,1024),1024>>>(shellAccel);
@@ -898,17 +882,17 @@ extern "C" int main(int argc, char *argv[]) {
 
   buildTriangleAccel(pl);
   buildUserGeomAccel(pl);
-  buildCuBQLAccel(pl);
+  //buildCuBQLAccel(pl);
 
   buildShellAccel(pl);
   buildICONGrid(pl);
-  buildCuBQLGrid(pl);
+  //buildCuBQLGrid(pl);
 
   pl.setTransfuncUpdateHandler([&](const dvr_course::Transfunc *tf, int index) {
     auto &shellAccel = g_appState.shellAccel;
     auto &gridICON = g_appState.gridICON;
     auto &gridUMesh = g_appState.gridUMesh;
-    size_t numMC_Shell = 1; // (for now)
+    size_t numMC_Shell = shellAccel.dims.x*size_t(shellAccel.dims.y)*shellAccel.dims.z;
     size_t numMC_ICON = gridICON.dims.x*size_t(gridICON.dims.y)*gridICON.dims.z;
     size_t numMC_UMesh = gridUMesh.dims.x*size_t(gridUMesh.dims.y)*gridUMesh.dims.z;
 
@@ -928,7 +912,6 @@ extern "C" int main(int argc, char *argv[]) {
                                                           tf->valueRange,
                                                           tf->relRange,
                                                           tf->opacity);
-
     computeMaxOpacities<<<iDivUp(numMC_UMesh,1024),1024>>>(gridUMesh,
                                                            d_rgbaLUT,
                                                            tf->size,

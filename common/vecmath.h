@@ -1894,6 +1894,10 @@ struct Ray
   Ray(const vec3f o, const vec3f d, float mi, float ma)
     : org(o), tmin(mi), dir(d), tmax(ma) {}
 
+  __host__ __device__
+  vec3f eval(float t) const
+  { return org+dir*t; }
+
   vec3f org;
   float tmin;
   vec3f dir;

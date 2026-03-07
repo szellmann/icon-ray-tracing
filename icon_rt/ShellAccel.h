@@ -20,7 +20,9 @@
 namespace icon_rt {
 
 struct ShellAccel {
+  vec3i dims;
   box1f *radialBounds, *latBounds, *lonBounds;
+  box1f *valueRanges;
   float *maxOpacities;
 };
 
@@ -50,9 +52,47 @@ bool intersectSphere(const Ray &ray, float radius, float &tnear, float &tfar) {
   return true;
 }
 
+#define g_latBounds box1f{-M_PI/2.f,M_PI/2.f}
+#define g_lonBounds box1f{-M_PI,M_PI}
+
+inline __device__
+float normalizeLat(float lat) {
+  while (lat<g_latBounds.lower) lat += g_latBounds.size();
+  while (lat>g_latBounds.upper) lat += g_latBounds.size();
+  return lat;
+}
+
+inline __device__
+float normalizeLon(float lon) {
+  while (lon<g_lonBounds.lower) lon += g_lonBounds.size();
+  while (lon>g_lonBounds.upper) lon += g_lonBounds.size();
+  return lon;
+}
+
+// this returns unbounded coordinates (can be negative or great than dims)
+// Useful for DDA, but no so for array accesses
+inline __device__
+vec3i projectToSphericalGrid(const vec3f sph, const vec3i dims) {
+  return{0, // todo
+      (sph.y-g_latBounds.lower)/g_latBounds.size()*(dims.y-1),
+      (sph.z-g_lonBounds.lower)/g_lonBounds.size()*(dims.z-1)};
+}
+
+// normalize unbounded coordinates to [0:dims)
+inline __device__
+vec3i normalizeGridCoord(vec3i coord, const vec3i dims) {
+  while (coord.x<0) coord.x += dims.x;
+  while (coord.x>=dims.x) coord.x -= dims.x;
+  while (coord.y<0) coord.y += dims.y;
+  while (coord.y>=dims.y) coord.y -= dims.y;
+  while (coord.z<0) coord.z += dims.z;
+  while (coord.z>=dims.z) coord.z -= dims.z;
+  return coord;
+}
+
 template<typename Func>
 inline __device__
-void traverseShellAccel(Ray ray, const ShellAccel &accel, const Func &func) {
+void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
   float t1,t2,t3,t4;
   bool s1 = intersectSphere(ray,accel.radialBounds->upper,t1,t4);
   bool s2 = intersectSphere(ray,accel.radialBounds->lower,t2,t3);
@@ -81,8 +121,97 @@ void traverseShellAccel(Ray ray, const ShellAccel &accel, const Func &func) {
 
   for (int i=0; i<2; ++i) {
     if (ranges[i].empty()) break;
-    int leafID=0;
-    if (!func(leafID,ranges[i].lower,ranges[i].upper)) break;
+    vec3f P1 = ray.org+ray.dir*ranges[i].lower;
+    vec3f P2 = ray.org+ray.dir*ranges[i].upper;
+    vec3f SP1 = toSpherical(P1);
+    vec3f SP2 = toSpherical(P2);
+
+    const float latInc = (M_PI)/float(accel.dims.y);
+    const float lonInc = (M_PI*2)/float(accel.dims.z);
+
+    vec3i cellID
+        = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].lower)),accel.dims);
+
+    // Cell increment
+    const vec3i step = {
+      SP1.x < SP2.x ? 1 : -1, // rad
+      SP1.y < SP2.y ? 1 : -1, // lat
+      SP1.z < SP2.z ? 1 : -1 // lon
+    };
+
+    // Stop when we step beyond the outermost cell
+    const vec3i stop
+        = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].upper)),accel.dims)+step;
+
+    // Increment in world space
+    float latOff = (cellID.y+step.y)*latInc;
+    float lonOff = (cellID.z+step.z)*lonInc;
+    Plane latPlane = makePlane(vec3f(0.f),
+        toCartesian(vec3f(0.f,latOff,g_latBounds.lower)),
+        toCartesian(vec3f(0.f,latOff,g_latBounds.upper)));
+    Plane lonPlane = makePlane(vec3f(0.f),
+        toCartesian(vec3f(0.f,g_lonBounds.lower,lonOff)),
+        toCartesian(vec3f(0.f,g_lonBounds.upper,lonOff)));
+    vec3f tnext = {
+      ranges[i].upper, // todo
+      evalPlane(latPlane,ray.eval(ranges[i].lower)),
+      evalPlane(lonPlane,ray.eval(ranges[i].lower))
+    };
+
+    float t = ranges[i].lower;
+    while (1) {
+      vec3f P = ray.org+ray.dir*t;
+
+      int tidx = -1;
+      vec3f tmp = tnext;
+      tidx = arg_min(tmp);
+      if (tmp[tidx] < t) tmp[tidx] = FLT_MAX;
+      tidx = arg_min(tmp);
+      if (tmp[tidx] < t) tmp[tidx] = FLT_MAX;
+      tidx = arg_min(tmp);
+
+      int leafID = linearIndex(normalizeGridCoord(cellID,accel.dims),accel.dims);
+      if (!func(leafID,t,tnext[tidx])) return;
+
+      const float t_closest = reduce_min(tnext);
+      if (tnext.x == t_closest) {
+        cellID.x += step.x;
+        if (cellID.x==stop.x) {
+          break;
+        }
+      }
+      if (tnext.y == t_closest) {
+        cellID.y += step.y;
+        if (cellID.y==stop.y) {
+          break;
+        }
+        Plane plane = makePlane(vec3f(0.f),
+            toCartesian(vec3f(0.f,cellID.y*latInc,g_latBounds.lower)),
+            toCartesian(vec3f(0.f,cellID.y*latInc,g_latBounds.upper)));
+        tnext.y = evalPlane(plane,P);
+      }
+      if (tnext.z == t_closest) {
+        cellID.z += step.z;
+        if (cellID.z==stop.z) {
+          break;
+        }
+        Plane plane = makePlane(vec3f(0.f),
+            toCartesian(vec3f(0.f,g_lonBounds.lower,cellID.z*lonInc)),
+            toCartesian(vec3f(0.f,g_lonBounds.upper,cellID.z*lonInc)));
+        tnext.z = evalPlane(plane,P);
+      }
+      t = t_closest;
+    }
+    // if (dbg) {
+    //   auto stop2 = projectToSphericalGrid(toSpherical(ray.eval(t)),accel.dims);
+    //   printf("%i,%i,%i -- %i,%i,%i\n",
+    //     stop.x,
+    //     stop.y,
+    //     stop.z,
+    //     stop2.x,
+    //     stop2.y,
+    //     stop2.z);
+    // }
   }
 
   // vec3f P1 = toSpherical(ray.org+ray.dir*t1);
