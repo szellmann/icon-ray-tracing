@@ -329,7 +329,7 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
 
   if (lp.volume.accelMode == SPHERE_ACCEL_MODE) {
     maxOpacities = lp.volume.accel.maxOpacities;
-    traverseShell(ray,lp.volume.accel,woodcockFunc);
+    traverseShellAccel(ray,lp.volume.accel,woodcockFunc);
   } else {
     maxOpacities = lp.volume.gridAccel.maxOpacities;
     dda3(ray,lp.volume.gridAccel.dims,lp.volume.gridAccel.worldBounds,woodcockFunc);

@@ -50,60 +50,55 @@ bool intersectSphere(const Ray &ray, float radius, float &tnear, float &tfar) {
   return true;
 }
 
+template<typename Func>
 inline __device__
-bool traverseAccel(const Ray &ray, const ShellAccel &accel, float &tnear, float &tfar) {
+void traverseShellAccel(Ray ray, const ShellAccel &accel, const Func &func) {
   float t1,t2,t3,t4;
   bool s1 = intersectSphere(ray,accel.radialBounds->upper,t1,t4);
   bool s2 = intersectSphere(ray,accel.radialBounds->lower,t2,t3);
 
-  if (!s1 && !s2) return false;
-  if (t4 < ray.tmin) return false;
+  if (!s1 && !s2) return;
+  if (t4 < ray.tmin) return;
+
+  box1f ranges[2] = {
+    {INFINITY,-INFINITY},
+    {INFINITY,-INFINITY},
+  };
+
   // outer sphere hit, but inner was missed:
   if (s1 && !s2) {
-    tnear = t1;
-    tfar  = t4;
+    ranges[0] = {t1,t4};
   }
   // inside front segment:
   else if (ray.tmin < t2) {
-    tnear = t1;
-    tfar  = t2;
+    ranges[0] = {t1,t2};
+    ranges[1] = {t3,t4};
   }
   // inside back segment:
   else { 
-    tnear = t3;
-    tfar  = t4;
+    ranges[0] = {t3,t4};
   }
 
-  vec3f P1 = toSpherical(ray.org+ray.dir*t1);
-  vec3f P2 = toSpherical(ray.org+ray.dir*t2);
-  vec3f P3 = toSpherical(ray.org+ray.dir*t3);
-  vec3f P4 = toSpherical(ray.org+ray.dir*t4);
-
-  box1f latBounds = *accel.latBounds;
-  if (!(latBounds.contains(P1.y)||latBounds.contains(P2.y)||
-        latBounds.contains(P3.y)||latBounds.contains(P4.y)))
-    return false;
-
-  box1f lonBounds = *accel.lonBounds;
-  if (!(lonBounds.contains(P1.z)||lonBounds.contains(P2.z)||
-        lonBounds.contains(P3.z)||lonBounds.contains(P4.z)))
-    return false;
-
-  return true;
-}
-
-template<typename Func>
-inline __device__
-void traverseShell(Ray ray, const ShellAccel &accel, const Func &func) {
-  float tnear, tfar;
-  while (traverseAccel(ray, accel, tnear, tfar)) {
-    ray.tmin = fmaxf(ray.tmin,tnear);
-    ray.tmax = tfar;
+  for (int i=0; i<2; ++i) {
+    if (ranges[i].empty()) break;
     int leafID=0;
-    if (!func(leafID,tnear,tfar)) break;
-    const float sceneEPS = accel.radialBounds->lower*1e-3f;
-    ray.tmin = tfar+sceneEPS;
+    if (!func(leafID,ranges[i].lower,ranges[i].upper)) break;
   }
+
+  // vec3f P1 = toSpherical(ray.org+ray.dir*t1);
+  // vec3f P2 = toSpherical(ray.org+ray.dir*t2);
+  // vec3f P3 = toSpherical(ray.org+ray.dir*t3);
+  // vec3f P4 = toSpherical(ray.org+ray.dir*t4);
+
+  // box1f latBounds = *accel.latBounds;
+  // if (!(latBounds.contains(P1.y)||latBounds.contains(P2.y)||
+  //       latBounds.contains(P3.y)||latBounds.contains(P4.y)))
+  //   return false;
+
+  // box1f lonBounds = *accel.lonBounds;
+  // if (!(lonBounds.contains(P1.z)||lonBounds.contains(P2.z)||
+  //       lonBounds.contains(P3.z)||lonBounds.contains(P4.z)))
+  //   return false;
 }
 
 }
