@@ -22,6 +22,7 @@
 #include <vecmath.h>
 // ours
 #include "ICONGrid.h"
+#include "ShellAccel.h"
 
 using namespace vecmath;
 
@@ -39,11 +40,6 @@ using namespace vecmath;
 namespace icon_rt {
 
 using bvh_t  = cuBQL::BinaryBVH<float,3>;
-
-struct ShellAccel {
-  box1f *radialBounds, *latBounds, *lonBounds;
-  float *maxOpacities;
-};
 
 struct Grid {
   box1f *valueRanges;
