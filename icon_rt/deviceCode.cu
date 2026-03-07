@@ -1,5 +1,5 @@
 // ======================================================================== //
-// Copyright 2025-2025 Stefan Zellmann                                      //
+// Copyright 2025-2026 Stefan Zellmann                                      //
 //                                                                          //
 // Licensed under the Apache License, Version 2.0 (the "License");          //
 // you may not use this file except in compliance with the License.         //
@@ -94,7 +94,6 @@ inline __device__ bool sampleVolume(const Volume &vol, vec3f pos, float &value)
       (const uint32_t primID)
     {
       const int *I = vol.cubql.indices + primID*6;
-      const float *S = vol.cubql.perVertex;
       // Hack direction vector into w:
       const vec4f v0(vol.cubql.vertices[I[0]],vol.cubql.perVertex[I[0]]);
       const vec4f v1(vol.cubql.vertices[I[1]],vol.cubql.perVertex[I[1]]);
@@ -133,6 +132,18 @@ inline __device__ vec4f postClassify(Transfunc tf, float v)
   vec4f v1 = tf.values[clamp(idx,0,tf.size-1)];
   vec4f v2 = tf.values[clamp(idx+1,0,tf.size-1)];
   return v1*frac+v2*(1.f-frac)*vec4f(1,1,1,tf.opacityScale);
+}
+
+__device__
+inline vec4f randomColor(unsigned idx)
+{
+  unsigned int r = (unsigned int)(idx*13*17 + 0x234235);
+  unsigned int g = (unsigned int)(idx*7*3*5 + 0x773477);
+  unsigned int b = (unsigned int)(idx*11*19 + 0x223766);
+  return vec4f{(r&255)/255.f,
+               (g&255)/255.f,
+               (b&255)/255.f,
+               1.f};
 }
 
 inline __device__ float woodcockTracking(const Ray &ray,
@@ -296,7 +307,6 @@ inline __device__
 void traverseShell(Ray ray, const Func &func) {
   auto &lp = optixLaunchParams;
   float tnear, tfar;
-  int cnt=0;
   while (traverseAccel(ray, tnear, tfar)) {
     ray.tmin = fmaxf(ray.tmin,tnear);
     ray.tmax = tfar;
@@ -376,6 +386,7 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
   float *maxOpacities{nullptr};
 
   auto woodcockFunc = [&](const int leafID, float t0, float t1) {
+#if 1
     vec3f albedo = 0.f;
     float extinction = 0.f;
     const float majorant = maxOpacities[leafID];
@@ -391,6 +402,13 @@ RAYGEN_PROGRAM(woodcockTrackingWithAccel)()
       return false;
     }
     return true; // traverse on
+#else
+    vec3f albedo = randomColor((unsigned)leafID);
+    float extinction = 1.f;
+    color = albedo * lp.ambientColor * lp.ambientRadiance;
+    alpha = extinction > 0.f ? 1.f : 0.f;
+    return false; // colorize first hit
+#endif
   };
 
   if (lp.volume.accelMode == SPHERE_ACCEL_MODE) {
