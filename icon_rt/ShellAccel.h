@@ -72,7 +72,10 @@ float normalizeLon(float lon) {
 // this returns unbounded coordinates (can be negative or great than dims)
 // Useful for DDA, but no so for array accesses
 inline __device__
-vec3i projectToSphericalGrid(const vec3f sph, const vec3i dims) {
+vec3i projectToSphericalGrid(const vec3f sph,
+                             const vec3i dims,
+                             const box3f sphericalBounds)
+{
   return{0, // todo
       (sph.y-g_latBounds.lower)/g_latBounds.size()*(dims.y-1),
       (sph.z-g_lonBounds.lower)/g_lonBounds.size()*(dims.z-1)};
@@ -129,8 +132,9 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     const float latInc = (M_PI)/float(accel.dims.y);
     const float lonInc = (M_PI*2)/float(accel.dims.z);
 
-    vec3i cellID
-        = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].lower)),accel.dims);
+    vec3i cellID = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].lower)),
+                                          accel.dims,
+                                          accel.sphericalBounds);
 
     // Cell increment
     const vec3i step = {
@@ -140,8 +144,9 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     };
 
     // Stop when we step beyond the outermost cell
-    const vec3i stop
-        = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].upper)),accel.dims)+step;
+    const vec3i stop = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].upper)),
+                                                          accel.dims,
+                                                          accel.sphericalBounds) + step;
 
     // Increment in world space
     float latOff = (cellID.y+step.y)*latInc;

@@ -308,13 +308,13 @@ __global__ void buildShell_ICON(ShellAccel shell,
   const ICONCell &cell = cells[cellID];
 
   for (int i=0; i<cell.numLayers; ++i) {
-    vec3i c1 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.x,cell.lon.x),shell.dims);
-    vec3i c2 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.y,cell.lon.y),shell.dims);
-    vec3i c3 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.z,cell.lon.z),shell.dims);
+    vec3i c1 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.x,cell.lon.x),shell.dims,shell.sphericalBounds);
+    vec3i c2 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.y,cell.lon.y),shell.dims,shell.sphericalBounds);
+    vec3i c3 = projectToSphericalGrid(vec3f(cell.height[i],cell.lat.z,cell.lon.z),shell.dims,shell.sphericalBounds);
 
-    vec3i c4 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.x,cell.lon.x),shell.dims);
-    vec3i c5 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.y,cell.lon.y),shell.dims);
-    vec3i c6 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.z,cell.lon.z),shell.dims);
+    vec3i c4 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.x,cell.lon.x),shell.dims,shell.sphericalBounds);
+    vec3i c5 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.y,cell.lon.y),shell.dims,shell.sphericalBounds);
+    vec3i c6 = projectToSphericalGrid(vec3f(cell.height[i+1],cell.lat.z,cell.lon.z),shell.dims,shell.sphericalBounds);
 
     vec3i loMC = min(c1,min(c2,c3));
     vec3i upMC = max(c4,max(c5,c6));
