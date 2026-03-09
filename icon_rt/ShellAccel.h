@@ -162,16 +162,13 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     while (1) {
       vec3f P = ray.org+ray.dir*t;
 
-      int tidx = -1;
-      vec3f tmp = tnext;
-      tidx = arg_min(tmp);
-      if (tmp[tidx] < t) tmp[tidx] = FLT_MAX;
-      tidx = arg_min(tmp);
-      if (tmp[tidx] < t) tmp[tidx] = FLT_MAX;
-      tidx = arg_min(tmp);
+      float t1 = FLT_MAX;
+      if (tnext.x<t1 && tnext.x>=t) t1 = tnext.x;
+      if (tnext.y<t1 && tnext.y>=t) t1 = tnext.y;
+      if (tnext.z<t1 && tnext.z>=t) t1 = tnext.z;
 
       int leafID = linearIndex(normalizeGridCoord(cellID,accel.dims),accel.dims);
-      if (!func(leafID,t,tnext[tidx])) return;
+      if (!func(leafID,t,t1)) return;
 
       const float t_closest = reduce_min(tnext);
       if (tnext.x == t_closest) {
