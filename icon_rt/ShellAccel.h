@@ -52,23 +52,6 @@ bool intersectSphere(const Ray &ray, float radius, float &tnear, float &tfar) {
   return true;
 }
 
-#define g_latBounds box1f{-M_PI/2.f,M_PI/2.f}
-#define g_lonBounds box1f{-M_PI,M_PI}
-
-inline __device__
-float normalizeLat(float lat) {
-  while (lat<g_latBounds.lower) lat += g_latBounds.size();
-  while (lat>g_latBounds.upper) lat += g_latBounds.size();
-  return lat;
-}
-
-inline __device__
-float normalizeLon(float lon) {
-  while (lon<g_lonBounds.lower) lon += g_lonBounds.size();
-  while (lon>g_lonBounds.upper) lon += g_lonBounds.size();
-  return lon;
-}
-
 // this returns unbounded coordinates (can be negative or great than dims)
 // Useful for DDA, but no so for array accesses
 inline __device__
@@ -76,9 +59,11 @@ vec3i projectToSphericalGrid(const vec3f sph,
                              const vec3i dims,
                              const box3f sphericalBounds)
 {
+  const box1f latBounds(sphericalBounds.lower.y,sphericalBounds.upper.y);
+  const box1f lonBounds(sphericalBounds.lower.z,sphericalBounds.upper.z);
   return{0, // todo
-      (sph.y-g_latBounds.lower)/g_latBounds.size()*(dims.y-1),
-      (sph.z-g_lonBounds.lower)/g_lonBounds.size()*(dims.z-1)};
+      (sph.y-latBounds.lower)/latBounds.size()*(dims.y-1),
+      (sph.z-lonBounds.lower)/lonBounds.size()*(dims.z-1)};
 }
 
 // normalize unbounded coordinates to [0:dims)
@@ -129,6 +114,9 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     vec3f SP1 = toSpherical(P1);
     vec3f SP2 = toSpherical(P2);
 
+    const box1f latBounds(accel.sphericalBounds.lower.y,accel.sphericalBounds.upper.y);
+    const box1f lonBounds(accel.sphericalBounds.lower.z,accel.sphericalBounds.upper.z);
+
     const float latInc = (M_PI)/float(accel.dims.y);
     const float lonInc = (M_PI*2)/float(accel.dims.z);
 
@@ -152,11 +140,11 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     float latOff = (cellID.y+step.y)*latInc;
     float lonOff = (cellID.z+step.z)*lonInc;
     Plane latPlane = makePlane(vec3f(0.f),
-        toCartesian(vec3f(0.f,latOff,g_latBounds.lower)),
-        toCartesian(vec3f(0.f,latOff,g_latBounds.upper)));
+        toCartesian(vec3f(0.f,latOff,latBounds.lower)),
+        toCartesian(vec3f(0.f,latOff,latBounds.upper)));
     Plane lonPlane = makePlane(vec3f(0.f),
-        toCartesian(vec3f(0.f,g_lonBounds.lower,lonOff)),
-        toCartesian(vec3f(0.f,g_lonBounds.upper,lonOff)));
+        toCartesian(vec3f(0.f,lonBounds.lower,lonOff)),
+        toCartesian(vec3f(0.f,lonBounds.upper,lonOff)));
     vec3f tnext = {
       ranges[i].upper, // todo
       evalPlane(latPlane,ray.eval(ranges[i].lower)),
@@ -188,8 +176,8 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
           break;
         }
         Plane plane = makePlane(vec3f(0.f),
-            toCartesian(vec3f(0.f,cellID.y*latInc,g_latBounds.lower)),
-            toCartesian(vec3f(0.f,cellID.y*latInc,g_latBounds.upper)));
+            toCartesian(vec3f(0.f,cellID.y*latInc,latBounds.lower)),
+            toCartesian(vec3f(0.f,cellID.y*latInc,latBounds.upper)));
         tnext.y = evalPlane(plane,P);
       }
       if (tnext.z == t_closest) {
@@ -198,8 +186,8 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
           break;
         }
         Plane plane = makePlane(vec3f(0.f),
-            toCartesian(vec3f(0.f,g_lonBounds.lower,cellID.z*lonInc)),
-            toCartesian(vec3f(0.f,g_lonBounds.upper,cellID.z*lonInc)));
+            toCartesian(vec3f(0.f,lonBounds.lower,cellID.z*lonInc)),
+            toCartesian(vec3f(0.f,lonBounds.upper,cellID.z*lonInc)));
         tnext.z = evalPlane(plane,P);
       }
       t = t_closest;

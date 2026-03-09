@@ -800,9 +800,9 @@ extern "C" int main(int argc, char *argv[]) {
     sphericalBounds.lower.x = fminf(sphericalBounds.lower.x,cell.height[0]);
     sphericalBounds.upper.x = fmaxf(sphericalBounds.upper.x,cell.height[cell.numLayers]);
     sphericalBounds.lower.y = fminf(sphericalBounds.lower.y,minLat);
-    sphericalBounds.upper.y = fminf(sphericalBounds.lower.y,maxLat);
+    sphericalBounds.upper.y = fmaxf(sphericalBounds.upper.y,maxLat);
     sphericalBounds.lower.z = fminf(sphericalBounds.lower.z,minLon);
-    sphericalBounds.upper.z = fminf(sphericalBounds.lower.z,maxLon);
+    sphericalBounds.upper.z = fmaxf(sphericalBounds.upper.z,maxLon);
     volbounds.extend(cell.getBounds());
     for (int j=0; j<cell.numLayers; ++j) dataRange.extend(cell.value[j]);
   }
