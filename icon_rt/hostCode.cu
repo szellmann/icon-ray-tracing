@@ -70,6 +70,7 @@ struct {
   Transfunc transfunc;
   float unitDistance;
   box3f volbounds;
+  box3f sphericalBounds;
   int mode{TRIANGLE_MODE};
   int accelMode{SPHERE_ACCEL_MODE};
   bool accelActive;
@@ -196,6 +197,10 @@ static void toggleAccelMode(Pipeline &pl, LaunchParams &parms) {
   }
   accelMode = g_appState.accelMode;
 }
+
+//=========================================================
+// CUDA kernels
+//=========================================================
 
 __global__ void initGrid(Grid grid)
 {
@@ -328,23 +333,6 @@ __global__ void buildShell_ICON(ShellAccel shell,
       }
     }
   }
-
-  atomicMin(&shell.radialBounds->lower,cell.height[0]);
-  atomicMax(&shell.radialBounds->upper,cell.height[cell.numLayers]);
-
-  atomicMin(&shell.latBounds->lower,cell.lat.x);
-  atomicMin(&shell.latBounds->lower,cell.lat.y);
-  atomicMin(&shell.latBounds->lower,cell.lat.z);
-  atomicMax(&shell.latBounds->upper,cell.lat.x);
-  atomicMax(&shell.latBounds->upper,cell.lat.y);
-  atomicMax(&shell.latBounds->upper,cell.lat.z);
-
-  atomicMin(&shell.lonBounds->lower,cell.lon.x);
-  atomicMin(&shell.lonBounds->lower,cell.lon.y);
-  atomicMin(&shell.lonBounds->lower,cell.lon.z);
-  atomicMax(&shell.lonBounds->upper,cell.lon.x);
-  atomicMax(&shell.lonBounds->upper,cell.lon.y);
-  atomicMax(&shell.lonBounds->upper,cell.lon.z);
 }
 
 __global__ void buildGrid_UMesh(Grid grid,
@@ -662,18 +650,9 @@ static void buildCuBQLAccel(Pipeline &pl) {
 }
 
 static void buildShellAccel(Pipeline &pl) {
-  g_appState.shellAccel = ShellAccel{vec3i(1,1024,1024),nullptr,nullptr,nullptr,nullptr};
+  box3f &sphericalBounds = g_appState.sphericalBounds;
+  g_appState.shellAccel = ShellAccel{vec3i(1,1024,1024),sphericalBounds,nullptr};
   ShellAccel &shellAccel = g_appState.shellAccel;
-  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.radialBounds,
-                            sizeof(*shellAccel.radialBounds)));
-  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.latBounds,
-                            sizeof(*shellAccel.latBounds)));
-  CUDA_SAFE_CALL(cudaMalloc(&shellAccel.lonBounds,
-                            sizeof(*shellAccel.lonBounds)));
-  box1f emptyBox{INFINITY,-INFINITY};
-  CUDA_SAFE_CALL(cudaMemcpy(shellAccel.radialBounds,&emptyBox,sizeof(emptyBox),
-                            cudaMemcpyHostToDevice));
-
   size_t numMC_Shell = shellAccel.dims.x*size_t(shellAccel.dims.y)*shellAccel.dims.z;
   CUDA_SAFE_CALL(cudaMalloc(&shellAccel.valueRanges,
                             sizeof(shellAccel.valueRanges[0])*numMC_Shell));
@@ -810,12 +789,20 @@ extern "C" int main(int argc, char *argv[]) {
   cells.push_back(cell);
 #endif
 
-  float innerRadius=INFINITY;
-  float outerRadius=-INFINITY;
+  box3f &sphericalBounds = g_appState.sphericalBounds;
+  sphericalBounds = box3f{vec3f(INFINITY),vec3f(-INFINITY)};
   for (int i=0; i<cells.size(); ++i) {
     ICONCell &cell = cells[i];
-    innerRadius = fminf(innerRadius,cell.height[0]);
-    outerRadius = fmaxf(outerRadius,cell.height[cell.numLayers]);
+    float minLat = fminf(cells[i].lat.x,fminf(cells[i].lat.y,cells[i].lat.z));
+    float maxLat = fmaxf(cells[i].lat.x,fmaxf(cells[i].lat.y,cells[i].lat.z));
+    float minLon = fminf(cells[i].lon.x,fminf(cells[i].lon.y,cells[i].lon.z));
+    float maxLon = fmaxf(cells[i].lon.x,fmaxf(cells[i].lon.y,cells[i].lon.z));
+    sphericalBounds.lower.x = fminf(sphericalBounds.lower.x,cell.height[0]);
+    sphericalBounds.upper.x = fmaxf(sphericalBounds.upper.x,cell.height[cell.numLayers]);
+    sphericalBounds.lower.y = fminf(sphericalBounds.lower.y,minLat);
+    sphericalBounds.upper.y = fminf(sphericalBounds.lower.y,maxLat);
+    sphericalBounds.lower.z = fminf(sphericalBounds.lower.z,minLon);
+    sphericalBounds.upper.z = fminf(sphericalBounds.lower.z,maxLon);
     volbounds.extend(cell.getBounds());
     for (int j=0; j<cell.numLayers; ++j) dataRange.extend(cell.value[j]);
   }
@@ -848,7 +835,7 @@ extern "C" int main(int argc, char *argv[]) {
     pl.setTransfunc(&tf);
   }
 
-  float magnitude = floorf(log10f(innerRadius));
+  float magnitude = floorf(log10f(sphericalBounds.lower.x));
   float scale = powf(10.f,magnitude-3);
   g_appState.unitDistance = 1.0f*scale;
   pl.uiParam("Unit distance", &g_appState.unitDistance, 0.01f*scale, 5.f*scale);

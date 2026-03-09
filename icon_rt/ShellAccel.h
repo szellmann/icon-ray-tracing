@@ -21,7 +21,7 @@ namespace icon_rt {
 
 struct ShellAccel {
   vec3i dims;
-  box1f *radialBounds, *latBounds, *lonBounds;
+  box3f sphericalBounds;
   box1f *valueRanges;
   float *maxOpacities;
 };
@@ -94,8 +94,8 @@ template<typename Func>
 inline __device__
 void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
   float t1,t2,t3,t4;
-  bool s1 = intersectSphere(ray,accel.radialBounds->upper,t1,t4);
-  bool s2 = intersectSphere(ray,accel.radialBounds->lower,t2,t3);
+  bool s1 = intersectSphere(ray,accel.sphericalBounds.upper.x,t1,t4);
+  bool s2 = intersectSphere(ray,accel.sphericalBounds.lower.x,t2,t3);
 
   if (!s1 && !s2) return;
   if (t4 < ray.tmin) return;
