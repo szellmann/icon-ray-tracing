@@ -59,11 +59,12 @@ vec3i projectToSphericalGrid(const vec3f sph,
                              const vec3i dims,
                              const box3f sphericalBounds)
 {
+  const box1f radBounds(sphericalBounds.lower.x,sphericalBounds.upper.x);
   const box1f latBounds(sphericalBounds.lower.y,sphericalBounds.upper.y);
   const box1f lonBounds(sphericalBounds.lower.z,sphericalBounds.upper.z);
-  return{0, // todo
-      (sph.y-latBounds.lower)/latBounds.size()*(dims.y-1),
-      (sph.z-lonBounds.lower)/lonBounds.size()*(dims.z-1)};
+  return{(sph.x-radBounds.lower)/radBounds.size()*(dims.x-1),
+         (sph.y-latBounds.lower)/latBounds.size()*(dims.y-1),
+         (sph.z-lonBounds.lower)/lonBounds.size()*(dims.z-1)};
 }
 
 // normalize unbounded coordinates to [0:dims)
@@ -114,11 +115,13 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     vec3f SP1 = toSpherical(P1);
     vec3f SP2 = toSpherical(P2);
 
+    const box1f radBounds(accel.sphericalBounds.lower.x,accel.sphericalBounds.upper.x);
     const box1f latBounds(accel.sphericalBounds.lower.y,accel.sphericalBounds.upper.y);
     const box1f lonBounds(accel.sphericalBounds.lower.z,accel.sphericalBounds.upper.z);
 
-    const float latInc = (M_PI)/float(accel.dims.y);
-    const float lonInc = (M_PI*2)/float(accel.dims.z);
+    const float radInc = radBounds.size()/float(accel.dims.x);
+    const float latInc = latBounds.size()/float(accel.dims.y);
+    const float lonInc = lonBounds.size()/float(accel.dims.z);
 
     vec3i cellID = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].lower)),
                                           accel.dims,
@@ -128,7 +131,7 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     const vec3i step = {
       SP1.x < SP2.x ? 1 : -1, // rad
       SP1.y < SP2.y ? 1 : -1, // lat
-      SP1.z < SP2.z ? 1 : -1 // lon
+      SP1.z < SP2.z ? 1 : -1  // lon
     };
 
     // Stop when we step beyond the outermost cell
@@ -137,8 +140,17 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
                                                           accel.sphericalBounds) + step;
 
     // Increment in world space
+    float radOff = (cellID.x+step.x)*radInc;
     float latOff = (cellID.y+step.y)*latInc;
     float lonOff = (cellID.z+step.z)*lonInc;
+    float sphereT;
+    float radius = step.x==1?accel.sphericalBounds.lower.x+radOff
+                            :accel.sphericalBounds.upper.x+radOff; if (dbg)printf("%f,%f,%f\n",radOff,radius,accel.sphericalBounds.lower.x);
+    float sphereT1,sphereT2;
+    bool sphereHit=intersectSphere(ray,radius,sphereT1,sphereT2);
+    if (!sphereHit) sphereT1 = ranges[i].upper;
+if (sphereHit && radius != accel.sphericalBounds.lower.x) printf("%i, rad: %f, (t1-t4) %f,%f,%f,%f (b1:%i, b2:%i)\n",i,radius,t1,t2,t3,t4,(int)s1,(int)s2);
+    //if (sphereT1 != ranges[i].upper) printf("sphereT1: %f, r.upper: %f, radius: %f, (t1-t4: %f,%f,%f,%f)\n",sphereT1,ranges[i].upper,radius,t1,t2,t3,t4);
     Plane latPlane = makePlane(vec3f(0.f),
         toCartesian(vec3f(0.f,latOff,latBounds.lower)),
         toCartesian(vec3f(0.f,latOff,latBounds.upper)));
@@ -146,7 +158,7 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
         toCartesian(vec3f(0.f,lonBounds.lower,lonOff)),
         toCartesian(vec3f(0.f,lonBounds.upper,lonOff)));
     vec3f tnext = {
-      ranges[i].upper, // todo
+      ranges[i].upper,
       evalPlane(latPlane,ray.eval(ranges[i].lower)),
       evalPlane(lonPlane,ray.eval(ranges[i].lower))
     };
