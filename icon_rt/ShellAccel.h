@@ -82,6 +82,8 @@ vec3i normalizeGridCoord(vec3i coord, const vec3i dims) {
 template<typename Func>
 inline __device__
 void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
+  const float sceneEPS = accel.sphericalBounds.lower.x*1e-6f;
+
   float t1,t2,t3,t4;
   bool s1 = intersectSphere(ray,accel.sphericalBounds.upper.x,t1,t4);
   bool s2 = intersectSphere(ray,accel.sphericalBounds.lower.x,t2,t3);
@@ -110,8 +112,8 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
 
   for (int i=0; i<2; ++i) {
     if (ranges[i].empty()) break;
-    vec3f P1 = ray.org+ray.dir*ranges[i].lower;
-    vec3f P2 = ray.org+ray.dir*ranges[i].upper;
+    vec3f P1 = ray.eval(ranges[i].lower+sceneEPS);
+    vec3f P2 = ray.eval(ranges[i].upper-sceneEPS);
     vec3f SP1 = toSpherical(P1);
     vec3f SP2 = toSpherical(P2);
 
@@ -123,9 +125,7 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     const float latInc = latBounds.size()/float(accel.dims.y);
     const float lonInc = lonBounds.size()/float(accel.dims.z);
 
-    vec3i cellID = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].lower)),
-                                          accel.dims,
-                                          accel.sphericalBounds);
+    vec3i cellID = projectToSphericalGrid(SP1,accel.dims,accel.sphericalBounds);
 
     // Cell increment
     const vec3i step = {
@@ -135,9 +135,7 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     };
 
     // Stop when we step beyond the outermost cell
-    const vec3i stop = projectToSphericalGrid(toSpherical(ray.eval(ranges[i].upper)),
-                                                          accel.dims,
-                                                          accel.sphericalBounds) + step;
+    const vec3i stop = projectToSphericalGrid(SP2,accel.dims,accel.sphericalBounds) + step;
 
     // Increment in world space
     float radOff = (cellID.x+step.x)*radInc;
@@ -145,12 +143,10 @@ void sdda(Ray ray, const ShellAccel &accel, const Func &func, bool dbg=false) {
     float lonOff = (cellID.z+step.z)*lonInc;
     float sphereT;
     float radius = step.x==1?accel.sphericalBounds.lower.x+radOff
-                            :accel.sphericalBounds.upper.x+radOff; if (dbg)printf("%f,%f,%f\n",radOff,radius,accel.sphericalBounds.lower.x);
+                            :accel.sphericalBounds.upper.x+radOff;
     float sphereT1,sphereT2;
     bool sphereHit=intersectSphere(ray,radius,sphereT1,sphereT2);
     if (!sphereHit) sphereT1 = ranges[i].upper;
-if (sphereHit && radius != accel.sphericalBounds.lower.x) printf("%i, rad: %f, (t1-t4) %f,%f,%f,%f (b1:%i, b2:%i)\n",i,radius,t1,t2,t3,t4,(int)s1,(int)s2);
-    //if (sphereT1 != ranges[i].upper) printf("sphereT1: %f, r.upper: %f, radius: %f, (t1-t4: %f,%f,%f,%f)\n",sphereT1,ranges[i].upper,radius,t1,t2,t3,t4);
     Plane latPlane = makePlane(vec3f(0.f),
         toCartesian(vec3f(0.f,latOff,latBounds.lower)),
         toCartesian(vec3f(0.f,latOff,latBounds.upper)));
