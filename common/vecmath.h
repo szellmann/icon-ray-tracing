@@ -132,7 +132,10 @@ struct vec3i
   __host__ __device__ vec3i(int x, int y, int z) : x(x), y(y), z(z) {}
   __host__ __device__ int &operator[](int i) { return ((int*)this)[i]; }
   __host__ __device__ const int &operator[](int i) const { return ((int*)this)[i]; }
-  int x, y, z;
+  union {
+    vec2i xy;
+    struct { int x, y, z; };
+  };
 };
 
 inline __host__ __device__
@@ -232,7 +235,10 @@ struct vec4i
   __host__ __device__ vec4i(int x, int y, int z, int w) : x(x), y(y), z(z), w(w) {}
   __host__ __device__ int &operator[](int i) { return ((int*)this)[i]; }
   __host__ __device__ const int &operator[](int i) const { return ((int*)this)[i]; }
-  int x, y, z, w;
+  union {
+    vec3i xyz;
+    struct { int x, y, z, w; };
+  };
 };
 
 inline __host__ __device__
@@ -412,6 +418,9 @@ struct vec3f
   __host__ __device__ float &operator[](int i) { return ((float*)this)[i]; }
   __host__ __device__ const float &operator[](int i) const { return ((float*)this)[i]; }
   union {
+    vec2f xy;
+    vec2f rg;
+    vec2f uv;
     struct { float x, y, z; };
     struct { float r, g, b; };
     struct { float u, v, w; };
@@ -573,6 +582,8 @@ struct vec4f
   __host__ __device__ float &operator[](int i) { return ((float*)this)[i]; }
   __host__ __device__ const float &operator[](int i) const { return ((float*)this)[i]; }
   union {
+    vec3f xyz;
+    vec3f rgb;
     struct { float x, y, z, w; };
     struct { float r, g, b, a; };
   };
