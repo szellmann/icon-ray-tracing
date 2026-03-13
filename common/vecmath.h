@@ -722,6 +722,14 @@ struct mat3f
 };
 
 inline __host__ __device__
+vec3f operator*(const mat3f &a, const vec3f &v) {
+  return vec3f(
+    a(0,0) * v.x + a(0,1) * v.y + a(0,2) * v.z,
+    a(1,0) * v.x + a(1,1) * v.y + a(1,2) * v.z,
+    a(2,0) * v.x + a(2,1) * v.y + a(2,2) * v.z);
+}
+
+inline __host__ __device__
 float determinant(const mat3f &m) {
   auto det2 = [](float m00, float m01, float m10, float m11) {
     return m00*m11 - m10*m01;
