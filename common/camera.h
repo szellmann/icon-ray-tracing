@@ -75,6 +75,10 @@ struct Camera
     return upVector;
   }
 
+  float getFovyInRadians() const {
+    return fovy;
+  }
+
   float getFovyInDegrees() const {
     return fovy/M_PI*180.f;
   }
@@ -117,12 +121,14 @@ struct CameraManip
 {
   enum MouseButton { Left, Middle, Right, None, };
 
+  enum Modifier { Shift=0x1, Ctrl=0x2, Alt=0x4, NoMod=0x0l };
+
   CameraManip() = default;
 
   CameraManip(Camera *cam, int w, int h)
     : camera(cam), vpWidth(w), vpHeight(h) {}
 
-  bool handleMouseDown(int x, int y, MouseButton button) {
+  bool handleMouseDown(int x, int y, MouseButton button, Modifier mod = NoMod) {
     if (!camera) return false;
     dragging = true;
     lastPos = {x,y};
@@ -136,18 +142,22 @@ struct CameraManip
     return true;
   }
 
-  bool handleMouseUp(int x, int y, MouseButton /*button*/) {
+  bool handleMouseUp(int x, int y, MouseButton /*button*/, Modifier = NoMod) {
     if (!camera) return false;
     dragging = false;
     mouseButton = None;
     return true;
   }
 
-  bool handleMouseMove(int x, int y) {
+  bool handleMouseMove(int x, int y, Modifier mod = NoMod) {
     if (!camera || !dragging)
       return false;
 
-    if (mouseButton == Left) {
+    bool rotate = mouseButton == Left && mod != Alt;
+    bool pan    = mouseButton == Left && mod == Alt;
+    bool zoom   = mouseButton == Right;
+
+    if (rotate) {
       vec3f currPos = ballProject(x,y);
       arcball.currRotation
         = quatf::rotation(arcball.downPos, currPos) * arcball.downRotation;
@@ -167,7 +177,22 @@ struct CameraManip
 
       camera->setOrientation(eye, poi, up, camera->fovy);
     }
-    else if (mouseButton == Right) {
+
+    if (pan) {
+      vec2i currPos{x,y};
+      float dx =  float(lastPos.x - currPos.x) / vpWidth;
+      float dy = -float(lastPos.y - currPos.y) / vpHeight;
+      float s = 2.f * camera->distance;
+      vec3f dir = normalize(camera->getPosition() - camera->getPOI());
+      vec3f right = cross(camera->getUp(), dir);
+      vec3f d = dx*s*right + dy*s*camera->getUp();
+      camera->setOrientation(camera->getPosition()+d,
+                             camera->getPOI()+d,
+                             camera->getUp(),
+                             camera->fovy);
+    }
+
+    if (zoom) {
       vec2i currPos{x,y};
       float dy = -float(lastPos.y - currPos.y) / vpHeight;
       float s = 2.f * camera->distance * dy;
